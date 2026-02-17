@@ -19,7 +19,9 @@ import (
 
 const (
 	screenWidth   = 600
-	screenHeight  = 600
+	screenHeight  = 800
+	mapWidth      = 600
+	mapHeight     = 600
 	secondPerYear = 2.0
 )
 
@@ -31,6 +33,7 @@ type ScreenMap struct {
 	stations                         []StationInfo
 	weatherData                      []WeatherData
 	selectedStation                  *StationInfo
+	outlineImage                     *ebiten.Image
 }
 
 func (sm *ScreenMap) Update() error {
@@ -41,17 +44,6 @@ func (sm *ScreenMap) Update() error {
 	return nil
 }
 
-func (sm *ScreenMap) Draw(screen *ebiten.Image) {
-	screen.Fill(color.RGBA{0, 0, 255, 255})
-	ebitenutil.DebugPrintAt(screen, "France", 10, 10)
-	sm.displayDepartmentWeather(screen)
-	sm.drawFranceOutline(screen)
-}
-
-func (sm *ScreenMap) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
-}
-
 func Run(logger *slog.Logger) {
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Météo")
@@ -60,23 +52,38 @@ func Run(logger *slog.Logger) {
 
 	minLong, maxLong, minLat, maxLat := minMaxLongLat(geojson)
 	screenMap := &ScreenMap{
-		geojson:   geojson,
-		minLong:   minLong,
-		maxLong:   maxLong,
-		minLat:    minLat,
-		maxLat:    maxLat,
-		startTime: time.Now(),
-		logger:    logger,
+		geojson:      geojson,
+		minLong:      minLong,
+		maxLong:      maxLong,
+		minLat:       minLat,
+		maxLat:       maxLat,
+		startTime:    time.Now(),
+		logger:       logger,
+		outlineImage: ebiten.NewImage(mapWidth, mapHeight),
 	}
 
 	weather := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "27"))
 	screenMap.weatherData = weather
 
 	screenMap.stations = getStationList(weather)
+	screenMap.drawFranceOutline()
 
 	if err := ebiten.RunGame(screenMap); err != nil {
 		log.Fatal(err)
 	}
+
+}
+
+func (sm *ScreenMap) Draw(screen *ebiten.Image) {
+	screen.Fill(color.RGBA{0, 0, 255, 255})
+	ebitenutil.DebugPrintAt(screen, "France", 10, 10)
+	sm.displayDepartmentWeather(screen)
+	screen.DrawImage(sm.outlineImage, nil)
+	// sm.drawFranceOutline()
+}
+
+func (sm *ScreenMap) Layout(outsideWidth, outsideHeight int) (int, int) {
+	return screenWidth, screenHeight
 }
 
 type Coordinate []float64
@@ -87,13 +94,13 @@ type FranceGeoJSON struct {
 	} `json:"geometry"`
 }
 
-func (sm *ScreenMap) drawFranceOutline(screen *ebiten.Image) {
+func (sm *ScreenMap) drawFranceOutline() {
 	var prevX, prevY float64
 
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%f", sm.minLong), 10, 60)
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%f", sm.maxLong), 10, 90)
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%f", sm.minLat), 10, 120)
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%f", sm.maxLat), 10, 150)
+	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.minLong), 10, 60)
+	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.maxLong), 10, 90)
+	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.minLat), 10, 120)
+	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.maxLat), 10, 150)
 
 	for i := range sm.geojson.Geometry.Coordinates {
 		for j := range sm.geojson.Geometry.Coordinates[i] {
@@ -109,15 +116,13 @@ func (sm *ScreenMap) drawFranceOutline(screen *ebiten.Image) {
 
 				x, y := sm.getScreenPosition(outline[0], outline[1])
 
-				vector.StrokeLine(screen, float32(prevX), float32(prevY), float32(x), float32(y), 2.0, lineColor, true)
+				vector.StrokeLine(sm.outlineImage, float32(prevX), float32(prevY), float32(x), float32(y), 2.0, lineColor, true)
 
 				prevX = x
 				prevY = y
 			}
 		}
 	}
-
-	ebitenutil.DebugPrintAt(screen, "Finish drawing", 10, 30)
 
 }
 
@@ -171,15 +176,15 @@ func minMaxLongLat(geoJson FranceGeoJSON) (float64, float64, float64, float64) {
 }
 
 func (sm *ScreenMap) getScreenPosition(long float64, lat float64) (float64, float64) {
-	x := (long - sm.minLong) * screenWidth / (sm.maxLong - sm.minLong)
-	y := screenHeight - (lat-sm.minLat)*screenHeight/(sm.maxLat-sm.minLat)
+	x := (long - sm.minLong) * mapWidth / (sm.maxLong - sm.minLong)
+	y := mapHeight - (lat-sm.minLat)*mapHeight/(sm.maxLat-sm.minLat)
 
 	return x, y
 }
 
 func (sm *ScreenMap) getLongLatFromScreenPosition(x, y float64) (float64, float64) {
-	long := sm.minLong + x*(sm.maxLong-sm.minLong)/screenWidth
-	lat := sm.minLat + (screenHeight-y)*(sm.maxLat-sm.minLat)/screenHeight
+	long := sm.minLong + x*(sm.maxLong-sm.minLong)/mapWidth
+	lat := sm.minLat + (mapHeight-y)*(sm.maxLat-sm.minLat)/mapHeight
 
 	return long, lat
 }
