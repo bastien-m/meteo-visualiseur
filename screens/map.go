@@ -6,8 +6,10 @@ import (
 	"image/color"
 	"log"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -18,7 +20,6 @@ import (
 const (
 	screenWidth   = 600
 	screenHeight  = 600
-	neubourg      = "27428002"
 	secondPerYear = 2.0
 )
 
@@ -27,16 +28,23 @@ type ScreenMap struct {
 	minLong, maxLong, minLat, maxLat float64
 	startTime                        time.Time
 	logger                           *slog.Logger
+	stations                         []StationInfo
+	weatherData                      []WeatherData
+	selectedStation                  *StationInfo
 }
 
 func (sm *ScreenMap) Update() error {
+	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+		x, y := ebiten.CursorPosition()
+		sm.selectedStation = sm.getNearestStation(float64(x), float64(y))
+	}
 	return nil
 }
 
 func (sm *ScreenMap) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{0, 0, 255, 255})
 	ebitenutil.DebugPrintAt(screen, "France", 10, 10)
-	sm.displayDepartmentWeather(screen, "27")
+	sm.displayDepartmentWeather(screen)
 	sm.drawFranceOutline(screen)
 }
 
@@ -60,6 +68,11 @@ func Run(logger *slog.Logger) {
 		startTime: time.Now(),
 		logger:    logger,
 	}
+
+	weather := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "27"))
+	screenMap.weatherData = weather
+
+	screenMap.stations = getStationList(weather)
 
 	if err := ebiten.RunGame(screenMap); err != nil {
 		log.Fatal(err)
@@ -164,27 +177,45 @@ func (sm *ScreenMap) getScreenPosition(long float64, lat float64) (float64, floa
 	return x, y
 }
 
-func (sm *ScreenMap) displayDepartmentWeather(screen *ebiten.Image, department string) {
-	weather := ReadRRTVentFile(sm.logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", department))
+func (sm *ScreenMap) getLongLatFromScreenPosition(x, y float64) (float64, float64) {
+	long := sm.minLong + x*(sm.maxLong-sm.minLong)/screenWidth
+	lat := sm.minLat + (screenHeight-y)*(sm.maxLat-sm.minLat)/screenHeight
 
-	min, max := getFirstLastObsDateForStation(neubourg, weather)
+	return long, lat
+}
 
-	deltaTime := time.Since(sm.startTime)
+func (sm *ScreenMap) displayDepartmentWeather(screen *ebiten.Image) {
+	if sm.selectedStation != nil {
+		min, max := getFirstLastObsDateForStation(sm.selectedStation.NumPost, sm.weatherData)
 
-	currentYear := min.Year() + (int(deltaTime.Seconds()/secondPerYear) % (max.Year() - min.Year()))
+		deltaTime := time.Since(sm.startTime)
 
-	rainInYear := 0.0
-	var textX, textY float64
-	for _, post := range weather {
-		if post.NumPost == neubourg {
-			textX, textY = sm.getScreenPosition(post.Lon, post.Lat)
-			if post.ObsDate.Year() == currentYear {
-				rainInYear += post.Rain
+		var currentYear int
+		if max.Year() == min.Year() {
+			currentYear = min.Year()
+		} else {
+			currentYear = min.Year() + (int(deltaTime.Seconds()/secondPerYear) % (max.Year() - min.Year()))
+		}
+
+		rainInYear := 0.0
+		var textX, textY float64
+		for _, post := range sm.weatherData {
+			if post.NumPost == sm.selectedStation.NumPost {
+				textX, textY = sm.getScreenPosition(post.Lon, post.Lat)
+				if post.ObsDate.Year() == currentYear {
+					rainInYear += post.Rain
+				}
 			}
 		}
-	}
 
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Rain in %d: %f", currentYear, rainInYear), int(math.Floor(textX)), int(math.Floor(textY)))
+		vector.FillCircle(screen, float32(math.Floor(textX)), float32(math.Floor(textY)), 2, color.RGBA{255, 0, 0, 255}, true)
+
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Rain at %s in %d: %f",
+			sm.selectedStation.CommonName,
+			currentYear,
+			rainInYear),
+			int(math.Floor(textX)), int(math.Floor(textY+10)))
+	}
 
 }
 
@@ -202,4 +233,35 @@ func getFirstLastObsDateForStation(station string, weatherData []WeatherData) (t
 	}
 
 	return min, max
+}
+
+func getStationList(wd []WeatherData) []StationInfo {
+	stationMap := make(map[string]StationInfo)
+	for i := range wd {
+		if _, exist := stationMap[wd[i].NumPost]; !exist {
+			stationMap[wd[i].NumPost] = wd[i].StationInfo
+		}
+	}
+
+	return slices.Collect(maps.Values(stationMap))
+}
+
+func (sm *ScreenMap) getNearestStation(x, y float64) *StationInfo {
+	long, lat := sm.getLongLatFromScreenPosition(x, y)
+
+	minD := math.MaxFloat64
+	var closestStation StationInfo
+	for _, station := range sm.stations {
+		dy := math.Abs(station.Lat - lat)
+		dx := math.Abs(station.Lon - long)
+
+		d := math.Sqrt(math.Pow(dy, 2) + math.Pow(dx, 2))
+
+		if d < minD {
+			minD = d
+			closestStation = station
+		}
+	}
+
+	return &closestStation
 }

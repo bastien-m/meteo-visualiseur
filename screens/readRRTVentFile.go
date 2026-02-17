@@ -11,14 +11,18 @@ import (
 	"time"
 )
 
-type WeatherData struct {
+type StationInfo struct {
 	NumPost    string
 	CommonName string
 	Lat        float64
 	Lon        float64
 	Alti       float64
-	ObsDate    time.Time
-	Rain       float64
+}
+
+type WeatherData struct {
+	StationInfo
+	ObsDate time.Time
+	Rain    float64
 }
 
 func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
@@ -71,13 +75,15 @@ func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
 				continue
 			}
 			data = append(data, WeatherData{
-				NumPost:    record[0],
-				CommonName: record[1],
-				Lat:        lat,
-				Lon:        lon,
-				Alti:       alt,
-				ObsDate:    t,
-				Rain:       rain,
+				StationInfo: StationInfo{
+					NumPost:    record[0],
+					CommonName: record[1],
+					Lat:        lat,
+					Lon:        lon,
+					Alti:       alt,
+				},
+				ObsDate: t,
+				Rain:    rain,
 			})
 		}
 		line++
