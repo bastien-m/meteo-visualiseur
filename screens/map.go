@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"maps"
 	"math"
+	"meteo/components"
 	"os"
 	"slices"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
@@ -40,6 +42,7 @@ type ScreenMap struct {
 	comparativeStationColor          color.Color
 	outlineImage                     *ebiten.Image
 	statisticsImage                  *ebiten.Image
+	fontFace                         *text.GoTextFace
 }
 
 func Run(logger *slog.Logger) {
@@ -61,6 +64,10 @@ func Run(logger *slog.Logger) {
 		statisticsImage:         ebiten.NewImage(statisticsWidth, statisticsHeight),
 		selectedStationColor:    color.RGBA{255, 0, 255, 255},
 		comparativeStationColor: color.RGBA{0, 255, 0, 255},
+		fontFace: &text.GoTextFace{
+			Source: components.FontSource,
+			Size:   14,
+		},
 	}
 
 	weather := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "27"))
@@ -100,12 +107,17 @@ func (sm *ScreenMap) Update() error {
 
 func (sm *ScreenMap) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{0, 0, 255, 255})
-	ebitenutil.DebugPrintAt(screen, "France", 10, 10)
+	textOp := &text.DrawOptions{}
+	textOp.GeoM.Translate(10, 10)
+	textOp.ColorScale.ScaleWithColor(color.White)
+	text.Draw(screen, "France", sm.fontFace, textOp)
+
+	// ebitenutil.DebugPrintAt(screen, "France", 10, 10)
 	if sm.selectedStation != nil {
-		sm.displayDepartmentWeather(screen, sm.selectedStation, 0, sm.selectedStationColor)
+		sm.displayStationInfo(screen, sm.selectedStation, 0, sm.selectedStationColor)
 	}
 	if sm.comparativeStation != nil {
-		sm.displayDepartmentWeather(screen, sm.comparativeStation, 30, sm.comparativeStationColor)
+		sm.displayStationInfo(screen, sm.comparativeStation, 30, sm.comparativeStationColor)
 	}
 	screen.DrawImage(sm.outlineImage, nil)
 
@@ -128,11 +140,6 @@ type FranceGeoJSON struct {
 
 func (sm *ScreenMap) drawFranceOutline() {
 	var prevX, prevY float64
-
-	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.minLong), 10, 60)
-	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.maxLong), 10, 90)
-	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.minLat), 10, 120)
-	ebitenutil.DebugPrintAt(sm.outlineImage, fmt.Sprintf("%f", sm.maxLat), 10, 150)
 
 	for i := range sm.geojson.Geometry.Coordinates {
 		for j := range sm.geojson.Geometry.Coordinates[i] {
@@ -221,7 +228,7 @@ func (sm *ScreenMap) getLongLatFromScreenPosition(x, y float64) (float64, float6
 	return long, lat
 }
 
-func (sm *ScreenMap) displayDepartmentWeather(screen *ebiten.Image, station *StationInfo, offset float64, graphColor color.Color) {
+func (sm *ScreenMap) displayStationInfo(screen *ebiten.Image, station *StationInfo, offset float64, graphColor color.Color) {
 	if sm.selectedStation != nil {
 		var textX, textY float64
 		for _, post := range sm.weatherData {
@@ -232,9 +239,11 @@ func (sm *ScreenMap) displayDepartmentWeather(screen *ebiten.Image, station *Sta
 
 		vector.FillCircle(screen, float32(math.Floor(textX)), float32(math.Floor(textY)), 2, graphColor, true)
 
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Station %s",
-			station.CommonName),
-			int(math.Floor(textX)), int(math.Floor(textY+10+offset)))
+		textOp := &text.DrawOptions{}
+		textOp.GeoM.Translate(math.Floor(textX), math.Floor(textY+10+offset))
+		textOp.ColorScale.ScaleWithColor(color.White)
+		text.Draw(screen, fmt.Sprintf("Station %s", station.CommonName), sm.fontFace, textOp)
+		textOp.GeoM.Reset()
 	}
 
 }
@@ -308,12 +317,16 @@ func (sm *ScreenMap) drawYAxisTicks() {
 		}
 	}
 
-	deltaRain := math.Ceil(maxRain - minRain)
+	// our scale is from closest 50's below minValue and closest 50's above maxValue
+	step := 50.0
+	deltaRain := (math.Ceil(maxRain/step) * step) - (math.Floor(minRain/step) * step)
 
-	for i := range int(deltaRain / 50) {
-		y := statisticsHeight - statisticsHeight/deltaRain*(minRain+float64(i)*50)
+	ratioPxRain := statisticsHeight / deltaRain
+
+	for i := range int(deltaRain / step) {
+		y := statisticsHeight - float64(i)*step*ratioPxRain
 		vector.StrokeLine(sm.statisticsImage, 0, float32(y), 3, float32(y), 2, color.RGBA{0, 0, 255, 255}, true)
-		ebitenutil.DebugPrintAt(sm.statisticsImage, fmt.Sprintf("%f", minRain+float64(i)*50), 3, int(y))
+		ebitenutil.DebugPrintAt(sm.statisticsImage, fmt.Sprintf("%.0f", math.Round((math.Floor(minRain/step)*step)+float64(i)*step)), 3, int(y))
 	}
 }
 
@@ -321,9 +334,10 @@ func (sm *ScreenMap) drawXAxisTicks() {
 	step := 5
 	startDate, endDate := 1950, 2025
 	// tick every 5 years
-	for i := range (startDate - endDate) / step {
-		x := (startDate + i*step) * (statisticsWidth / endDate)
-		vector.StrokeLine(sm.statisticsImage, float32(x), statisticsHeight, float32(x), statisticsHeight-3, 2, color.RGBA{0, 0, 255, 255}, true)
+	for i := range (endDate - startDate) / step {
+		x := (i * step) * (statisticsWidth / (endDate - startDate))
+		vector.StrokeLine(sm.statisticsImage, float32(x), statisticsHeight, float32(x), statisticsHeight-10, 2, color.RGBA{0, 0, 255, 255}, true)
+
 		ebitenutil.DebugPrintAt(sm.statisticsImage, fmt.Sprintf("%d", (50+i*step)%100), x, statisticsHeight-20)
 	}
 }
@@ -349,7 +363,6 @@ func minMaxRainByStation(station *StationInfo, weatherData []WeatherData) (float
 func (sm *ScreenMap) displayStationRainGraph(station *StationInfo, comparativeStation *StationInfo, graphColor color.Color) {
 	if station != nil {
 		rainByYear := rainByYearForStation(station, sm.weatherData)
-		// minD, maxD := getFirstLastObsDateForStation(station.NumPost, sm.weatherData)
 		minD := 1950
 		maxD := 2025
 
@@ -369,9 +382,9 @@ func (sm *ScreenMap) displayStationRainGraph(station *StationInfo, comparativeSt
 			currentYear := minD + dyear
 			if rain, exist := rainByYear[currentYear]; exist {
 				x := float32(statisticsWidth) / (float32(maxD) - float32(minD)) * float32(dyear)
-				y := statisticsHeight / (float32(maxRain - minRain)) * float32(rain-minRain)
+				y := statisticsHeight - statisticsHeight/(float32(maxRain-minRain))*float32(rain-minRain)
 
-				if dyear != 0 {
+				if prevY != 0 && y != 0 {
 					vector.StrokeLine(sm.statisticsImage, prevX, prevY, x, y, 2, graphColor, true)
 				}
 				prevX = x

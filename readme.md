@@ -24,6 +24,8 @@ Afficher la carte de la France et le relevé pluviométrique par an d'une statio
 
 Afficher le comparatif entre 2 villes
 
+![capture écran](doc/v2.png)
+
 ## V3
 
 Possibilité d'afficher une hitmap
