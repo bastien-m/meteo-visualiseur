@@ -19,6 +19,14 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
+type Coordinate []float64
+
+type FranceGeoJSON struct {
+	Geometry struct {
+		Coordinates [][][]Coordinate `json:"coordinates"`
+	} `json:"geometry"`
+}
+
 const (
 	screenWidth      = 600
 	screenHeight     = 800
@@ -27,6 +35,9 @@ const (
 	statisticsWidth  = 600
 	statisticsHeight = 200
 	secondPerYear    = 2.0
+	minYear          = 1950
+	maxYear          = 2027
+	nodata           = -1
 )
 
 type ScreenMap struct {
@@ -70,10 +81,13 @@ func Run(logger *slog.Logger) {
 		},
 	}
 
-	weather := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "27"))
-	screenMap.weatherData = weather
+	weather27 := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "27"))
+	weather35 := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "35"))
+	weather35Latest := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_latest-2025-2026_RR-T-Vent.csv", "35"))
+	weather85 := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", "85"))
+	screenMap.weatherData = slices.Concat(weather27, weather35, weather35Latest, weather85)
+	screenMap.stations = getStationList(screenMap.weatherData)
 
-	screenMap.stations = getStationList(weather)
 	screenMap.drawFranceOutline()
 	screenMap.statisticsImage.Fill(color.RGBA{255, 255, 255, 255})
 
@@ -84,23 +98,22 @@ func Run(logger *slog.Logger) {
 }
 
 func (sm *ScreenMap) Update() error {
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		x, y := ebiten.CursorPosition()
-		sm.selectedStation = sm.getNearestStation(float64(x), float64(y))
+	mx, my := ebiten.CursorPosition()
+	if sm.isCursorInMapView(mx, my) {
+		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+			sm.selectedStation = sm.getNearestStation(float64(mx), float64(my))
 
-	}
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight) {
-		x, y := ebiten.CursorPosition()
-		sm.comparativeStation = sm.getNearestStation(float64(x), float64(y))
+		}
+		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight) {
+			sm.comparativeStation = sm.getNearestStation(float64(mx), float64(my))
 
-	}
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) || ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight) {
-		sm.statisticsImage.Clear()
-		sm.statisticsImage.Fill(color.RGBA{255, 255, 255, 255})
-		sm.displayStationRainGraph(sm.selectedStation, sm.comparativeStation, sm.selectedStationColor)
-		sm.displayStationRainGraph(sm.comparativeStation, sm.selectedStation, sm.comparativeStationColor)
-		sm.drawXAxisTicks()
-		sm.drawYAxisTicks()
+		}
+		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) || ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight) {
+			sm.redrawStatistics()
+		}
+	} else if sm.isCursorInStatisticView(mx, my) {
+		sm.redrawStatistics()
+		sm.drawStatisticForHoveredYear(mx)
 	}
 	return nil
 }
@@ -130,14 +143,6 @@ func (sm *ScreenMap) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return screenWidth, screenHeight
 }
 
-type Coordinate []float64
-
-type FranceGeoJSON struct {
-	Geometry struct {
-		Coordinates [][][]Coordinate `json:"coordinates"`
-	} `json:"geometry"`
-}
-
 func (sm *ScreenMap) drawFranceOutline() {
 	var prevX, prevY float64
 
@@ -163,6 +168,71 @@ func (sm *ScreenMap) drawFranceOutline() {
 		}
 	}
 
+}
+
+func (sm *ScreenMap) redrawStatistics() {
+	sm.statisticsImage.Clear()
+	sm.statisticsImage.Fill(color.RGBA{255, 255, 255, 255})
+	sm.displayStationRainGraph(sm.selectedStation, sm.comparativeStation, sm.selectedStationColor)
+	sm.displayStationRainGraph(sm.comparativeStation, sm.selectedStation, sm.comparativeStationColor)
+	sm.drawXAxisTicks()
+	sm.drawYAxisTicks()
+}
+
+func (sm *ScreenMap) drawStatisticForHoveredYear(mx int) {
+	year := int(math.Round(minYear + float64(mx)*(float64(maxYear-minYear)/float64(statisticsWidth))))
+	var rainSelectedStation, rainComparativeStation float64
+	if sm.selectedStation != nil {
+		rainByYear := rainByYearForStation(sm.selectedStation, sm.weatherData)
+		rainSelectedStation = rainByYear[year]
+	}
+	if sm.comparativeStation != nil {
+		rainByYear := rainByYearForStation(sm.comparativeStation, sm.weatherData)
+		rainComparativeStation = rainByYear[year]
+	}
+
+	yearTextOp := &text.DrawOptions{}
+	yearTextOp.GeoM.Translate(float64(mx), 20)
+	yearTextOp.ColorScale.ScaleWithColor(color.RGBA{0, 0, 255, 255})
+	text.Draw(sm.statisticsImage, fmt.Sprintf("%d", year), sm.fontFace, yearTextOp)
+
+	vector.StrokeLine(sm.statisticsImage, float32(mx), 0, float32(mx), statisticsHeight, 1, color.RGBA{0, 0, 255, 255}, false)
+
+	if rainSelectedStation > rainComparativeStation {
+		if rainSelectedStation != 0 {
+			textOp := &text.DrawOptions{}
+			textOp.GeoM.Translate(float64(mx), 50.0)
+			textOp.ColorScale.ScaleWithColor(sm.selectedStationColor)
+			text.Draw(sm.statisticsImage, fmt.Sprintf("%.0f", rainSelectedStation), sm.fontFace, textOp)
+		}
+		if rainComparativeStation != 0 {
+			textOp := &text.DrawOptions{}
+			textOp.GeoM.Translate(float64(mx), 150.0)
+			textOp.ColorScale.ScaleWithColor(sm.comparativeStationColor)
+			text.Draw(sm.statisticsImage, fmt.Sprintf("%.0f", rainComparativeStation), sm.fontFace, textOp)
+		}
+	} else {
+		if rainSelectedStation != 0 {
+			textOp := &text.DrawOptions{}
+			textOp.GeoM.Translate(float64(mx), 150.0)
+			textOp.ColorScale.ScaleWithColor(sm.selectedStationColor)
+			text.Draw(sm.statisticsImage, fmt.Sprintf("%.0f", rainSelectedStation), sm.fontFace, textOp)
+		}
+		if rainComparativeStation != 0 {
+			textOp := &text.DrawOptions{}
+			textOp.GeoM.Translate(float64(mx), 50.0)
+			textOp.ColorScale.ScaleWithColor(sm.comparativeStationColor)
+			text.Draw(sm.statisticsImage, fmt.Sprintf("%.0f", rainComparativeStation), sm.fontFace, textOp)
+		}
+	}
+}
+
+func (sm *ScreenMap) isCursorInStatisticView(x, y int) bool {
+	return y > mapHeight && y < screenHeight
+}
+
+func (sm *ScreenMap) isCursorInMapView(x, y int) bool {
+	return y < mapHeight
 }
 
 func readGeoJsonFile(logger *slog.Logger) FranceGeoJSON {
@@ -249,14 +319,16 @@ func (sm *ScreenMap) displayStationInfo(screen *ebiten.Image, station *StationIn
 }
 
 func getFirstLastObsDateForStation(station string, weatherData []WeatherData) (time.Time, time.Time) {
-	min := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
-	max := time.Date(1949, time.January, 1, 0, 0, 0, 0, time.UTC)
+	min := time.Date(maxYear, time.January, 1, 0, 0, 0, 0, time.UTC)
+	max := time.Date(minYear, time.January, 1, 0, 0, 0, 0, time.UTC)
 	for i := range weatherData {
-		if weatherData[i].NumPost == station {
-			if weatherData[i].ObsDate.Before(min) {
-				min = weatherData[i].ObsDate
-			} else if weatherData[i].ObsDate.After(max) {
-				max = weatherData[i].ObsDate
+		if weatherData[i].Rain != nodata {
+			if weatherData[i].NumPost == station {
+				if weatherData[i].ObsDate.Before(min) {
+					min = weatherData[i].ObsDate
+				} else if weatherData[i].ObsDate.After(max) {
+					max = weatherData[i].ObsDate
+				}
 			}
 		}
 	}
@@ -331,14 +403,16 @@ func (sm *ScreenMap) drawYAxisTicks() {
 }
 
 func (sm *ScreenMap) drawXAxisTicks() {
-	step := 5
-	startDate, endDate := 1950, 2025
 	// tick every 5 years
-	for i := range (endDate - startDate) / step {
-		x := (i * step) * (statisticsWidth / (endDate - startDate))
-		vector.StrokeLine(sm.statisticsImage, float32(x), statisticsHeight, float32(x), statisticsHeight-10, 2, color.RGBA{0, 0, 255, 255}, true)
+	step := 5
+	textOp := &text.DrawOptions{}
+	textOp.ColorScale.ScaleWithColor(color.White)
 
-		ebitenutil.DebugPrintAt(sm.statisticsImage, fmt.Sprintf("%d", (50+i*step)%100), x, statisticsHeight-20)
+	for i := range int(math.Ceil(float64(maxYear-minYear) / float64(step))) {
+		x := float32(i*step) * (float32(statisticsWidth) / float32(maxYear-minYear))
+		vector.StrokeLine(sm.statisticsImage, x, statisticsHeight, x, statisticsHeight-10, 2, color.RGBA{0, 0, 255, 255}, true)
+		textOp.GeoM.Translate(float64(x), 10)
+		ebitenutil.DebugPrintAt(sm.statisticsImage, fmt.Sprintf("%d", (50+i*step)%100), int(x), statisticsHeight-20)
 	}
 }
 
@@ -349,11 +423,13 @@ func minMaxRainByStation(station *StationInfo, weatherData []WeatherData) (float
 	maxRain := -math.MaxFloat64
 
 	for _, rain := range rainByYear {
-		if rain < minRain {
-			minRain = rain
-		}
-		if rain > maxRain {
-			maxRain = rain
+		if rain != nodata {
+			if rain < minRain {
+				minRain = rain
+			}
+			if rain > maxRain {
+				maxRain = rain
+			}
 		}
 	}
 
@@ -363,8 +439,8 @@ func minMaxRainByStation(station *StationInfo, weatherData []WeatherData) (float
 func (sm *ScreenMap) displayStationRainGraph(station *StationInfo, comparativeStation *StationInfo, graphColor color.Color) {
 	if station != nil {
 		rainByYear := rainByYearForStation(station, sm.weatherData)
-		minD := 1950
-		maxD := 2025
+		minD := minYear
+		maxD := maxYear
 
 		minRain, maxRain := minMaxRainByStation(station, sm.weatherData)
 		if comparativeStation != nil {
@@ -384,7 +460,7 @@ func (sm *ScreenMap) displayStationRainGraph(station *StationInfo, comparativeSt
 				x := float32(statisticsWidth) / (float32(maxD) - float32(minD)) * float32(dyear)
 				y := statisticsHeight - statisticsHeight/(float32(maxRain-minRain))*float32(rain-minRain)
 
-				if prevY != 0 && y != 0 {
+				if prevY != nodata && prevY != 0 && y != nodata && y != 0 {
 					vector.StrokeLine(sm.statisticsImage, prevX, prevY, x, y, 2, graphColor, true)
 				}
 				prevX = x
@@ -396,11 +472,26 @@ func (sm *ScreenMap) displayStationRainGraph(station *StationInfo, comparativeSt
 }
 
 func rainByYearForStation(station *StationInfo, winfos []WeatherData) map[int]float64 {
-	result := make(map[int]float64)
+	rainByYear := make(map[int]float64)
+	obsByYear := make(map[int]int)
+	// at least 95% of obs should have been done to be a valid measure
+	minimalObsByYear := 365.0 * 0.95
 	for _, data := range winfos {
 		if data.StationInfo.NumPost == station.NumPost {
-			result[data.ObsDate.Year()] += data.Rain
+			rainByYear[data.ObsDate.Year()] += data.Rain
+			obsByYear[data.ObsDate.Year()]++
 		}
 	}
-	return result
+
+	rainByYearCleaned := make(map[int]float64)
+
+	for i, v := range rainByYear {
+		if obsByYear[i] >= int(minimalObsByYear) {
+			rainByYearCleaned[i] = v
+		} else {
+			rainByYearCleaned[i] = -1
+		}
+	}
+
+	return rainByYearCleaned
 }
