@@ -1,4 +1,4 @@
-package screens
+package types
 
 import (
 	"encoding/csv"
@@ -6,7 +6,10 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
+	"math"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -19,13 +22,46 @@ type StationInfo struct {
 	Alti       float64
 }
 
-type WeatherData struct {
+type WeatherRecord struct {
 	StationInfo
 	ObsDate time.Time
 	Rain    float64
 }
 
-func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
+type WeatherData struct {
+	data     []WeatherRecord
+	stations []StationInfo
+}
+
+func (wd *WeatherData) ClosestStation(long, lat float64) *StationInfo {
+	minD := math.MaxFloat64
+	var closestStation StationInfo
+	for _, station := range wd.stations {
+		dy := math.Abs(station.Lat - lat)
+		dx := math.Abs(station.Lon - long)
+
+		d := math.Sqrt(math.Pow(dy, 2) + math.Pow(dx, 2))
+
+		if d < minD {
+			minD = d
+			closestStation = station
+		}
+	}
+
+	return &closestStation
+}
+
+func NewWeatherData(logger *slog.Logger, filename string) *WeatherData {
+	records := ReadRRTVentFile(logger, filename)
+	stations := getStationList(records)
+
+	return &WeatherData{
+		data:     records,
+		stations: stations,
+	}
+}
+
+func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherRecord {
 	f, err := os.Open(fmt.Sprintf("./data/%s", filename))
 	if err != nil {
 		log.Fatal(err)
@@ -36,7 +72,7 @@ func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
 	csvReader := csv.NewReader(f)
 	csvReader.Comma = ';'
 
-	data := make([]WeatherData, 0, 1000000)
+	data := make([]WeatherRecord, 0, 1000000)
 
 	line := 0
 	for {
@@ -74,7 +110,7 @@ func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
 				logger.Error("Error while parsing line", "error", err, "line", line, "value", record[6])
 				continue
 			}
-			data = append(data, WeatherData{
+			data = append(data, WeatherRecord{
 				StationInfo: StationInfo{
 					NumPost:    record[0],
 					CommonName: record[1],
@@ -90,4 +126,15 @@ func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherData {
 	}
 
 	return data
+}
+
+func getStationList(wd []WeatherRecord) []StationInfo {
+	stationMap := make(map[string]StationInfo)
+	for i := range wd {
+		if _, exist := stationMap[wd[i].NumPost]; !exist {
+			stationMap[wd[i].NumPost] = wd[i].StationInfo
+		}
+	}
+
+	return slices.Collect(maps.Values(stationMap))
 }
