@@ -1,8 +1,11 @@
 package components
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -10,13 +13,27 @@ type InteractiveMap struct {
 	widget.BaseWidget
 	image   *canvas.Image
 	size    fyne.Size
+	layers  []*canvas.Image
+	tooltip *canvas.Text
 	OnTap   func(pos fyne.Position)
+	OnHover func(pos fyne.Position) string
 }
 
+var _ desktop.Hoverable = (*InteractiveMap)(nil)
+
 func NewInteractiveMap(img *canvas.Image, width, height float32) *InteractiveMap {
-	m := &InteractiveMap{image: img, size: fyne.NewSize(width, height)}
+	tooltip := canvas.NewText("", color.White)
+	tooltip.TextSize = 12
+	tooltip.Hidden = true
+
+	m := &InteractiveMap{image: img, size: fyne.NewSize(width, height), tooltip: tooltip}
 	m.ExtendBaseWidget(m)
 	return m
+}
+
+func (m *InteractiveMap) AddLayer(img *canvas.Image) {
+	m.layers = append(m.layers, img)
+	m.Refresh()
 }
 
 func (m *InteractiveMap) MinSize() fyne.Size {
@@ -29,6 +46,73 @@ func (m *InteractiveMap) Tapped(ev *fyne.PointEvent) {
 	}
 }
 
-func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(m.image)
+func (m *InteractiveMap) MouseIn(ev *desktop.MouseEvent) {
+	m.updateTooltip(ev.Position)
 }
+
+func (m *InteractiveMap) MouseMoved(ev *desktop.MouseEvent) {
+	m.updateTooltip(ev.Position)
+}
+
+func (m *InteractiveMap) MouseOut() {
+	m.tooltip.Hidden = true
+	m.tooltip.Refresh()
+}
+
+func (m *InteractiveMap) updateTooltip(pos fyne.Position) {
+	if m.OnHover == nil {
+		return
+	}
+	text := m.OnHover(pos)
+	if text == "" {
+		m.tooltip.Hidden = true
+		m.tooltip.Refresh()
+		return
+	}
+	m.tooltip.Text = text
+	m.tooltip.Hidden = false
+	m.tooltip.Move(fyne.NewPos(pos.X+10, pos.Y-20))
+	m.tooltip.Refresh()
+}
+
+func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
+	return &mapRenderer{m: m}
+}
+
+type mapRenderer struct {
+	m *mapRendererOwner
+}
+
+type mapRendererOwner = InteractiveMap
+
+func (r *mapRenderer) Layout(size fyne.Size) {
+	r.m.image.Resize(size)
+	r.m.image.Move(fyne.NewPos(0, 0))
+	for _, l := range r.m.layers {
+		l.Resize(size)
+		l.Move(fyne.NewPos(0, 0))
+	}
+}
+
+func (r *mapRenderer) MinSize() fyne.Size {
+	return r.m.size
+}
+
+func (r *mapRenderer) Refresh() {
+	r.m.image.Refresh()
+	for _, l := range r.m.layers {
+		l.Refresh()
+	}
+	r.m.tooltip.Refresh()
+}
+
+func (r *mapRenderer) Objects() []fyne.CanvasObject {
+	objs := []fyne.CanvasObject{r.m.image}
+	for _, l := range r.m.layers {
+		objs = append(objs, l)
+	}
+	objs = append(objs, r.m.tooltip)
+	return objs
+}
+
+func (r *mapRenderer) Destroy() {}

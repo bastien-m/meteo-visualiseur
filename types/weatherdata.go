@@ -4,7 +4,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"maps"
 	"math"
@@ -29,14 +28,14 @@ type WeatherRecord struct {
 }
 
 type WeatherData struct {
-	data     []WeatherRecord
-	stations []StationInfo
+	Data     []WeatherRecord
+	Stations []StationInfo
 }
 
 func (wd *WeatherData) ClosestStation(long, lat float64) *StationInfo {
 	minD := math.MaxFloat64
 	var closestStation StationInfo
-	for _, station := range wd.stations {
+	for _, station := range wd.Stations {
 		dy := math.Abs(station.Lat - lat)
 		dx := math.Abs(station.Lon - long)
 
@@ -51,20 +50,31 @@ func (wd *WeatherData) ClosestStation(long, lat float64) *StationInfo {
 	return &closestStation
 }
 
-func NewWeatherData(logger *slog.Logger, filename string) *WeatherData {
-	records := ReadRRTVentFile(logger, filename)
-	stations := getStationList(records)
+func NewWeatherData(logger *slog.Logger, department string) *WeatherData {
+	records, err := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_previous-1950-2024_RR-T-Vent.csv", department))
+	stations := make([]StationInfo, 0, 50)
+	if err == nil {
+		newStations := getStationList(records)
+		stations = slices.Concat(stations, newStations)
+	}
+
+	freshRecord, err := ReadRRTVentFile(logger, fmt.Sprintf("Q_%s_latest-2025-2026_RR-T-Vent.csv", department))
+	if err == nil {
+		records = slices.Concat(records, freshRecord)
+		newStations := getStationList(records)
+		stations = slices.Concat(stations, newStations)
+	}
 
 	return &WeatherData{
-		data:     records,
-		stations: stations,
+		Data:     records,
+		Stations: stations,
 	}
 }
 
-func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherRecord {
+func ReadRRTVentFile(logger *slog.Logger, filename string) ([]WeatherRecord, error) {
 	f, err := os.Open(fmt.Sprintf("./data/%s", filename))
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	defer f.Close()
@@ -125,7 +135,7 @@ func ReadRRTVentFile(logger *slog.Logger, filename string) []WeatherRecord {
 		line++
 	}
 
-	return data
+	return data, nil
 }
 
 func getStationList(wd []WeatherRecord) []StationInfo {
