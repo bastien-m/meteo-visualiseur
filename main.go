@@ -16,6 +16,8 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"github.com/fogleman/gg"
@@ -41,6 +43,12 @@ func main() {
 
 	logger.Info("Démarrage de l'App")
 
+	db, err := types.InitDB("meteo.db", false)
+	if err != nil {
+		logger.Error("Can't init database", "error", err)
+		panic(err)
+	}
+
 	a := app.New()
 	w := a.NewWindow("Météo")
 
@@ -49,67 +57,123 @@ func main() {
 		FranceGeoJSON: geojson,
 	}
 
-	weatherData := types.NewWeatherData(logger, "35")
+	stations := make([]types.StationModel, 0, 100)
 
 	w.Resize(fyne.NewSize(500, 500))
 
-	stationNames := stationsNameList(weatherData.Stations)
-	selectStation := widget.NewSelectEntry(stationNames)
+	mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
+	geoData.Bounds = geoData.GetBounds()
+	mapImg := renderMap(geoData, mapDimension)
+	interactiveMap := components.NewInteractiveMap(mapImg, mapWidth, mapHeight)
+
+	stationNames := binding.NewStringList()
+	selectStation := widget.NewSelectEntry([]string{})
+
+	stationNames.AddListener(binding.NewDataListener(func() {
+		names, _ := stationNames.Get()
+		selectStation.SetOptions(names)
+	}))
+
+	refreshMap := func() {
+		stationsImg := renderStations(stations, mapDimension, *geoData.Bounds)
+		interactiveMap.AddLayer(stationsImg)
+
+		stationNames.Set(stationsNameList(stations))
+	}
+
+	loadDepartment := func(department string) {
+		progress := dialog.NewCustomWithoutButtons("Import en cours",
+			container.NewVBox(
+				widget.NewLabel(fmt.Sprintf("Import du département %s...", department)),
+				widget.NewProgressBarInfinite(),
+			), w)
+		progress.Show()
+
+		go func() {
+			err := types.ImportWeatherData(db, logger, department)
+			if len(department) == 1 {
+				department = "0" + department
+			}
+
+			if err != nil {
+				fyne.Do(func() {
+					progress.Hide()
+					dialog.ShowError(err, w)
+				})
+				return
+			}
+			stations = types.GetStationsForDepartment(db, department)
+			fyne.Do(func() {
+				refreshMap()
+				progress.Hide()
+				dialog.ShowInformation("Import terminé", fmt.Sprintf("Département %s importé avec succès", department), w)
+			})
+		}()
+	}
+
 	sidebar := container.NewVBox(
-		widget.NewButton("Charger un département", func() {}),
+		widget.NewButton("Charger un département", func() {
+			entry := widget.NewEntry()
+			entry.SetPlaceHolder("Numéro du département (ex: 35)")
+			dialog.ShowForm("Charger un département", "Importer", "Annuler", []*widget.FormItem{
+				widget.NewFormItem("Département", entry),
+			}, func(ok bool) {
+				if ok && entry.Text != "" {
+					loadDepartment(strings.TrimSpace(entry.Text))
+				}
+			}, w)
+		}),
 		selectStation,
 	)
 
-	var metadataContainer *fyne.Container
-	showStation := func(name string) {
-		station, err := getStationByName(weatherData.Stations, name)
-		if err == nil {
-			sidebar.Remove(metadataContainer)
-			metadataContainer = renderStationMetadata(station, weatherData)
-			sidebar.Add(metadataContainer)
-		}
-	}
+	// var metadataContainer *fyne.Container
+	// showStation := func(name string) {
+	// 	station, err := getStationByName(stations, name)
+	// 	if err == nil {
+	// 		sidebar.Remove(metadataContainer)
+	// 		metadataContainer = renderStationMetadata(station, weatherData)
+	// 		sidebar.Add(metadataContainer)
+	// 	}
+	// }
 
-	selectStation.OnChanged = func(v string) {
-		selectStation.SetOptions(findStationsByPrefix(stationNames, v))
-		showStation(v)
-	}
+	// selectStation.OnChanged = func(v string) {
+	// 	selectStation.SetOptions(findStationsByPrefix(stationNames, v))
+	// 	showStation(v)
+	// }
 
-	selectStation.OnSubmitted = func(v string) {
-		showStation(v)
-	}
+	// selectStation.OnSubmitted = func(v string) {
+	// 	showStation(v)
+	// }
 
-	mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
+	// interactiveMap.OnHover = func(pos fyne.Position) string {
+	// 	if len(stations) == 0 {
+	// 		return ""
+	// 	}
+	// 	long, lat := projectionFromXY(
+	// 		mapDimension,
+	// 		*geoData.Bounds,
+	// 		float64(pos.X),
+	// 		float64(pos.Y))
+	// 	station := weatherData.ClosestStation(long, lat)
 
-	geoData.Bounds = geoData.GetBounds()
-	mapImg := renderMap(geoData, mapDimension)
-	stationsImg := renderStations(weatherData.Stations, mapDimension, *geoData.Bounds)
-	interactiveMap := components.NewInteractiveMap(mapImg, mapWidth, mapHeight)
-	interactiveMap.AddLayer(stationsImg)
+	// 	return station.CommonName
+	// }
+	// interactiveMap.OnTap = func(pos fyne.Position) {
+	// 	if len(weatherData.Stations) == 0 {
+	// 		return
+	// 	}
+	// 	long, lat := projectionFromXY(
+	// 		mapDimension,
+	// 		*geoData.Bounds,
+	// 		float64(pos.X),
+	// 		float64(pos.Y))
 
-	interactiveMap.OnHover = func(pos fyne.Position) string {
-		long, lat := projectionFromXY(
-			mapDimension,
-			*geoData.Bounds,
-			float64(pos.X),
-			float64(pos.Y))
-		station := weatherData.ClosestStation(long, lat)
+	// 	station := weatherData.ClosestStation(long, lat)
 
-		return station.CommonName
-	}
-	interactiveMap.OnTap = func(pos fyne.Position) {
-		long, lat := projectionFromXY(
-			mapDimension,
-			*geoData.Bounds,
-			float64(pos.X),
-			float64(pos.Y))
-
-		station := weatherData.ClosestStation(long, lat)
-
-		sidebar.Remove(metadataContainer)
-		metadataContainer = renderStationMetadata(station, weatherData)
-		sidebar.Add(metadataContainer)
-	}
+	// 	sidebar.Remove(metadataContainer)
+	// 	metadataContainer = renderStationMetadata(station, weatherData)
+	// 	sidebar.Add(metadataContainer)
+	// }
 
 	split := container.NewHSplit(sidebar, interactiveMap)
 	split.Offset = 0.33
@@ -174,14 +238,14 @@ func renderMap(g *types.GeoData, d Dimension) *canvas.Image {
 	return img
 }
 
-func renderStations(stations []types.StationInfo, d Dimension, b types.Bounds) *canvas.Image {
+func renderStations(stations []types.StationModel, d Dimension, b types.Bounds) *canvas.Image {
 
 	dc := gg.NewContext(int(d.width), int(d.height))
 	dc.SetColor(color.White)
 	dc.SetLineWidth(2)
 
 	for _, station := range stations {
-		x, y := projection(station.Lon, station.Lat, d, b)
+		x, y := projection(station.Long, station.Lat, d, b)
 		dc.DrawCircle(float64(x), float64(y), 1)
 		dc.Fill()
 	}
@@ -198,7 +262,7 @@ func projection(long, lat float64, d Dimension, b types.Bounds) (x, y int) {
 	return x, y
 }
 
-func stationsNameList(stations []types.StationInfo) []string {
+func stationsNameList(stations []types.StationModel) []string {
 	names := make([]string, 0, len(stations))
 
 	for _, station := range stations {
@@ -253,7 +317,7 @@ func truncate(s string, max int) string {
 	return string(truncated) + "..."
 }
 
-func getStationByName(stations []types.StationInfo, name string) (*types.StationInfo, error) {
+func getStationByName(stations []types.StationModel, name string) (*types.StationModel, error) {
 	for _, station := range stations {
 		if strings.EqualFold(station.CommonName, name) {
 			return &station, nil
