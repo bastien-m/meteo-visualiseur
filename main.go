@@ -21,6 +21,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"github.com/fogleman/gg"
+	"gorm.io/gorm"
 )
 
 type Dimension struct {
@@ -102,7 +103,15 @@ func main() {
 				})
 				return
 			}
-			stations = types.GetStationsForDepartment(db, department)
+			newStations := types.GetStationsForDepartment(db, department)
+
+			sn := make([]string, 0, 100)
+			for _, station := range newStations {
+				sn = append(sn, station.CommonName)
+			}
+
+			stations = slices.Concat(stations, newStations)
+
 			fyne.Do(func() {
 				refreshMap()
 				progress.Hide()
@@ -126,56 +135,87 @@ func main() {
 		selectStation,
 	)
 
-	// var metadataContainer *fyne.Container
-	// showStation := func(name string) {
-	// 	station, err := getStationByName(stations, name)
-	// 	if err == nil {
-	// 		sidebar.Remove(metadataContainer)
-	// 		metadataContainer = renderStationMetadata(station, weatherData)
-	// 		sidebar.Add(metadataContainer)
-	// 	}
-	// }
+	mw := container.NewMultipleWindows()
 
-	// selectStation.OnChanged = func(v string) {
-	// 	selectStation.SetOptions(findStationsByPrefix(stationNames, v))
-	// 	showStation(v)
-	// }
+	selectStation.OnChanged = func(v string) {
+		names, _ := stationNames.Get()
+		selectStation.SetOptions(findStationsByPrefix(names, v))
+	}
 
-	// selectStation.OnSubmitted = func(v string) {
-	// 	showStation(v)
-	// }
+	selectStation.OnSubmitted = func(v string) {
+		station, err := getStationByName(stations, v)
+		if err != nil {
+			dialog.NewError(err, w)
+		} else {
+			content := buildStationMetadataDisplay(db, w, station)
+			if content != nil {
+				wrapped := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
+				iw := container.NewInnerWindow(station.CommonName, wrapped)
+				iw.CloseIntercept = func() {
+					for i, win := range mw.Windows {
+						if win == iw {
+							mw.Windows = append(mw.Windows[:i], mw.Windows[i+1:]...)
+							break
+						}
+					}
+					mw.Refresh()
+				}
+				mw.Windows = append(mw.Windows, iw)
+				mw.Refresh()
+			}
+		}
+	}
 
-	// interactiveMap.OnHover = func(pos fyne.Position) string {
-	// 	if len(stations) == 0 {
-	// 		return ""
-	// 	}
-	// 	long, lat := projectionFromXY(
-	// 		mapDimension,
-	// 		*geoData.Bounds,
-	// 		float64(pos.X),
-	// 		float64(pos.Y))
-	// 	station := weatherData.ClosestStation(long, lat)
+	interactiveMap.OnHover = func(pos fyne.Position) string {
+		if len(stations) == 0 {
+			return ""
+		}
+		long, lat := projectionFromXY(
+			mapDimension,
+			*geoData.Bounds,
+			float64(pos.X),
+			float64(pos.Y))
+		station, err := types.GetClosestStation(db, long, lat)
 
-	// 	return station.CommonName
-	// }
-	// interactiveMap.OnTap = func(pos fyne.Position) {
-	// 	if len(weatherData.Stations) == 0 {
-	// 		return
-	// 	}
-	// 	long, lat := projectionFromXY(
-	// 		mapDimension,
-	// 		*geoData.Bounds,
-	// 		float64(pos.X),
-	// 		float64(pos.Y))
+		if err != nil {
+			return ""
+		}
 
-	// 	station := weatherData.ClosestStation(long, lat)
+		return station.CommonName
+	}
 
-	// 	sidebar.Remove(metadataContainer)
-	// 	metadataContainer = renderStationMetadata(station, weatherData)
-	// 	sidebar.Add(metadataContainer)
-	// }
+	interactiveMap.OnTap = func(pos fyne.Position) {
+		long, lat := projectionFromXY(
+			mapDimension,
+			*geoData.Bounds,
+			float64(pos.X),
+			float64(pos.Y))
+		station, err := types.GetClosestStation(db, long, lat)
 
-	split := container.NewHSplit(sidebar, interactiveMap)
+		if err != nil {
+			dialog.NewError(err, w)
+		} else {
+			content := buildStationMetadataDisplay(db, w, station)
+			if content != nil {
+				wrapped := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
+				iw := container.NewInnerWindow(station.CommonName, wrapped)
+				iw.CloseIntercept = func() {
+					for i, win := range mw.Windows {
+						if win == iw {
+							mw.Windows = append(mw.Windows[:i], mw.Windows[i+1:]...)
+							break
+						}
+					}
+					mw.Refresh()
+				}
+				mw.Windows = append(mw.Windows, iw)
+				mw.Refresh()
+			}
+		}
+	}
+
+	mapWithWindows := container.NewStack(interactiveMap, mw)
+	split := container.NewHSplit(sidebar, mapWithWindows)
 	split.Offset = 0.33
 
 	w.SetContent(split)
@@ -283,13 +323,20 @@ func findStationsByPrefix(stations []string, prefix string) []string {
 	return matches
 }
 
-func renderStationMetadata(station *types.StationInfo, weatherData *types.WeatherData) *fyne.Container {
+func buildStationMetadataDisplay(db *gorm.DB, w fyne.Window, station *types.StationModel) *fyne.Container {
+	weatherData, err := types.GetRainByStation(db, station.NumPost)
+
+	if err != nil {
+		dialog.NewError(err, w)
+		return nil
+	}
+
 	grid := container.New(layout.NewGridLayout(2))
 
 	nameLabel := widget.NewLabel("Nom")
 	name := widget.NewLabel(truncate(station.CommonName, 10))
 
-	min, max, avg := getMinMaxAvgRainByStation(station, *weatherData)
+	min, max, avg := getMinMaxAvgRainByStation(weatherData)
 
 	grid.Add(nameLabel)
 	grid.Add(name)
@@ -327,38 +374,20 @@ func getStationByName(stations []types.StationModel, name string) (*types.Statio
 	return nil, fmt.Errorf("Can't find station %s", name)
 }
 
-func getMinMaxAvgRainByStation(station *types.StationInfo, weatherData types.WeatherData) (minRain, maxRain, avgRain float64) {
-	type DataPerYear struct {
-		occurence int
-		rain      float64
-	}
-	sumPerYear := make(map[int]DataPerYear)
-	for _, record := range weatherData.Data {
-		if record.NumPost == station.NumPost {
-			sumPerYear[record.ObsDate.Year()] = DataPerYear{
-				occurence: sumPerYear[record.ObsDate.Year()].occurence + 1,
-				rain:      sumPerYear[record.ObsDate.Year()].rain + record.Rain,
-			}
-		}
-	}
-
+func getMinMaxAvgRainByStation(sumPerYear []types.RainByStation) (minRain, maxRain, avgRain float64) {
 	minRain = math.MaxFloat64
 	maxRain = -math.MaxFloat64
-	completeYear := 0
 	sumRain := 0.0
 	for _, data := range sumPerYear {
-		if data.occurence >= int(math.Round(365*0.95)) {
-			if data.rain < minRain {
-				minRain = data.rain
-			}
-			if data.rain > maxRain {
-				maxRain = data.rain
-			}
-			completeYear++
-			sumRain += data.rain
+		if data.Rain < minRain {
+			minRain = data.Rain
 		}
+		if data.Rain > maxRain {
+			maxRain = data.Rain
+		}
+		sumRain += data.Rain
 	}
 
-	return minRain, maxRain, sumRain / float64(completeYear)
+	return minRain, maxRain, sumRain / float64(len(sumPerYear))
 
 }

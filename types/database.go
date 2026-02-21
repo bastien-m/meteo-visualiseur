@@ -135,18 +135,18 @@ type RainByStation struct {
 func GetRainByStation(db *gorm.DB, numPost string) ([]RainByStation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	rows, err := db.WithContext(ctx).Model(&WeatherRecordModel{}).
-		Select("num_post, strftime('%Y', obs_date) as year, sum(rain)").
-		Where("num_post = ?", numPost).
-		Group("num_post, year").Rows()
-
-	if err != nil {
-		return nil, fmt.Errorf("Can't find station %s", numPost)
-	}
-	defer rows.Close()
 
 	var result []RainByStation
-	rows.Scan(result)
+	err := db.WithContext(ctx).Model(&WeatherRecordModel{}).
+		Select("station_num_post as num_post, substr(obs_date, 1, 4) as year, sum(rain) as rain").
+		Where("station_num_post = ?", numPost).
+		Group("station_num_post, year").
+		Having("count(1) > 365 * 0.95").
+		Find(&result).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("Can't find station %s: %w", numPost, err)
+	}
 
 	return result, nil
 }
@@ -156,6 +156,18 @@ func GetStationsForDepartment(db *gorm.DB, dpt string) []StationModel {
 	db.Where("num_post LIKE ?", dpt+"%").Find(&stations)
 
 	return stations
+}
+
+func GetClosestStation(db *gorm.DB, long, lat float64) (*StationModel, error) {
+	var closestStation StationModel
+	err := db.Raw("SELECT num_post, common_name, long, lat FROM station_models ORDER BY (lat - ?)*(lat - ?) + (long - ?)*(long - ?) LIMIT 1", lat, lat, long, long).
+		Scan(&closestStation).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &closestStation, nil
 }
 
 func loadRRTVentFile(logger *slog.Logger, filename string) (weatherRecords []WeatherRecordModel, stations []StationModel, err error) {

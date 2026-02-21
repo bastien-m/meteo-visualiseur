@@ -2,6 +2,7 @@ package components
 
 import (
 	"image/color"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -11,12 +12,13 @@ import (
 
 type InteractiveMap struct {
 	widget.BaseWidget
-	image   *canvas.Image
-	size    fyne.Size
-	layers  []*canvas.Image
-	tooltip *canvas.Text
-	OnTap   func(pos fyne.Position)
-	OnHover func(pos fyne.Position) string
+	image      *canvas.Image
+	size       fyne.Size
+	layers     []*canvas.Image
+	tooltip    *canvas.Text
+	hoverTimer *time.Timer
+	OnTap      func(pos fyne.Position)
+	OnHover    func(pos fyne.Position) string
 }
 
 var _ desktop.Hoverable = (*InteractiveMap)(nil)
@@ -63,16 +65,23 @@ func (m *InteractiveMap) updateTooltip(pos fyne.Position) {
 	if m.OnHover == nil {
 		return
 	}
-	text := m.OnHover(pos)
-	if text == "" {
-		m.tooltip.Hidden = true
-		m.tooltip.Refresh()
-		return
+	if m.hoverTimer != nil {
+		m.hoverTimer.Stop()
 	}
-	m.tooltip.Text = text
-	m.tooltip.Hidden = false
-	m.tooltip.Move(fyne.NewPos(pos.X+10, pos.Y-20))
-	m.tooltip.Refresh()
+	m.hoverTimer = time.AfterFunc(200*time.Millisecond, func() {
+		fyne.Do(func() {
+			text := m.OnHover(pos)
+			if text == "" {
+				m.tooltip.Hidden = true
+				m.tooltip.Refresh()
+				return
+			}
+			m.tooltip.Text = text
+			m.tooltip.Hidden = false
+			m.tooltip.Move(fyne.NewPos(pos.X+10, pos.Y-20))
+			m.tooltip.Refresh()
+		})
+	})
 }
 
 func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
