@@ -105,11 +105,6 @@ func main() {
 			}
 			newStations := types.GetStationsForDepartment(db, department)
 
-			sn := make([]string, 0, 100)
-			for _, station := range newStations {
-				sn = append(sn, station.CommonName)
-			}
-
 			stations = slices.Concat(stations, newStations)
 
 			fyne.Do(func() {
@@ -119,6 +114,39 @@ func main() {
 			})
 		}()
 	}
+
+	loadExistingData := func() {
+		progress := dialog.NewCustomWithoutButtons("Import en cours",
+			container.NewVBox(
+				widget.NewLabel("Import des données ..."),
+				widget.NewProgressBarInfinite(),
+			), w)
+		progress.Show()
+
+		filesImported, err := types.GetFilesImported(db)
+		if err != nil {
+			progress.Hide()
+			dialog.NewError(err, w)
+		} else {
+			response := make(chan []types.StationModel, len(filesImported))
+
+			for _, fileImported := range filesImported {
+				go func() {
+					response <- types.GetStationsForDepartment(db, fileImported.Department)
+				}()
+			}
+
+			for range filesImported {
+				stations = slices.Concat(stations, <-response)
+			}
+			refreshMap()
+			progress.Hide()
+
+			dialog.ShowInformation("Import terminé", fmt.Sprintf("%d Département(s) importé(s) avec succès", len(filesImported)), w)
+		}
+	}
+
+	loadExistingData()
 
 	sidebar := container.NewVBox(
 		widget.NewButton("Charger un département", func() {
@@ -132,6 +160,7 @@ func main() {
 				}
 			}, w)
 		}),
+		widget.NewLabel("Sélectionnez une station"),
 		selectStation,
 	)
 

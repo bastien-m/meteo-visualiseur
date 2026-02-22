@@ -170,6 +170,11 @@ func GetClosestStation(db *gorm.DB, long, lat float64) (*StationModel, error) {
 	return &closestStation, nil
 }
 
+func GetFilesImported(db *gorm.DB) (result []FileProcessedModel, err error) {
+	err = db.Find(&result).Error
+	return result, err
+}
+
 func loadRRTVentFile(logger *slog.Logger, filename string) (weatherRecords []WeatherRecordModel, stations []StationModel, err error) {
 	// TODO: in future version we should stream data from data.gouv here
 	f, err := os.Open(fmt.Sprintf("./data/%s", filename))
