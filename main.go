@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image/color"
@@ -21,7 +22,6 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"github.com/fogleman/gg"
-	"gorm.io/gorm"
 )
 
 type Dimension struct {
@@ -44,7 +44,7 @@ func main() {
 
 	logger.Info("Démarrage de l'App")
 
-	db, err := types.InitDB("meteo.db", false)
+	db, err := types.InitDuckDB()
 	if err != nil {
 		logger.Error("Can't init database", "error", err)
 		panic(err)
@@ -58,7 +58,7 @@ func main() {
 		FranceGeoJSON: geojson,
 	}
 
-	stations := make([]types.StationModel, 0, 100)
+	stations := make([]types.StationInfo, 0, 100)
 
 	w.Resize(fyne.NewSize(500, 500))
 
@@ -91,10 +91,10 @@ func main() {
 		progress.Show()
 
 		go func() {
-			err := types.ImportWeatherData(db, logger, department)
 			if len(department) == 1 {
 				department = "0" + department
 			}
+			err := types.DownloadParquetFile(department)
 
 			if err != nil {
 				fyne.Do(func() {
@@ -103,7 +103,14 @@ func main() {
 				})
 				return
 			}
-			newStations := types.GetStationsForDepartment(db, department)
+			newStations, err := types.GetStations(db)
+			if err != nil {
+				fyne.Do(func() {
+					progress.Hide()
+					dialog.ShowError(err, w)
+				})
+				return
+			}
 
 			stations = slices.Concat(stations, newStations)
 
@@ -123,26 +130,16 @@ func main() {
 			), w)
 		progress.Show()
 
-		filesImported, err := types.GetFilesImported(db)
+		existingStations, err := types.GetStations(db)
 		if err != nil {
 			progress.Hide()
 			dialog.NewError(err, w)
 		} else {
-			response := make(chan []types.StationModel, len(filesImported))
-
-			for _, fileImported := range filesImported {
-				go func() {
-					response <- types.GetStationsForDepartment(db, fileImported.Department)
-				}()
-			}
-
-			for range filesImported {
-				stations = slices.Concat(stations, <-response)
-			}
+			stations = existingStations
 			refreshMap()
 			progress.Hide()
 
-			dialog.ShowInformation("Import terminé", fmt.Sprintf("%d Département(s) importé(s) avec succès", len(filesImported)), w)
+			dialog.ShowInformation("Import terminé", "Département(s) importé(s) avec succès", w)
 		}
 	}
 
@@ -204,7 +201,7 @@ func main() {
 			*geoData.Bounds,
 			float64(pos.X),
 			float64(pos.Y))
-		station, err := types.GetClosestStation(db, long, lat)
+		station, err := types.GetClosestStationDuck(db, lat, long)
 
 		if err != nil {
 			return ""
@@ -219,7 +216,7 @@ func main() {
 			*geoData.Bounds,
 			float64(pos.X),
 			float64(pos.Y))
-		station, err := types.GetClosestStation(db, long, lat)
+		station, err := types.GetClosestStationDuck(db, lat, long)
 
 		if err != nil {
 			dialog.NewError(err, w)
@@ -307,15 +304,15 @@ func renderMap(g *types.GeoData, d Dimension) *canvas.Image {
 	return img
 }
 
-func renderStations(stations []types.StationModel, d Dimension, b types.Bounds) *canvas.Image {
+func renderStations(stations []types.StationInfo, d Dimension, b types.Bounds) *canvas.Image {
 
 	dc := gg.NewContext(int(d.width), int(d.height))
 	dc.SetColor(color.White)
 	dc.SetLineWidth(2)
 
 	for _, station := range stations {
-		x, y := projection(station.Long, station.Lat, d, b)
-		dc.DrawCircle(float64(x), float64(y), 1)
+		x, y := projection(station.Lon, station.Lat, d, b)
+		dc.DrawCircle(float64(x), float64(y), 0.5)
 		dc.Fill()
 	}
 
@@ -331,7 +328,7 @@ func projection(long, lat float64, d Dimension, b types.Bounds) (x, y int) {
 	return x, y
 }
 
-func stationsNameList(stations []types.StationModel) []string {
+func stationsNameList(stations []types.StationInfo) []string {
 	names := make([]string, 0, len(stations))
 
 	for _, station := range stations {
@@ -352,8 +349,8 @@ func findStationsByPrefix(stations []string, prefix string) []string {
 	return matches
 }
 
-func buildStationMetadataDisplay(db *gorm.DB, w fyne.Window, station *types.StationModel) *fyne.Container {
-	weatherData, err := types.GetRainByStation(db, station.NumPost)
+func buildStationMetadataDisplay(db *sql.DB, w fyne.Window, station *types.StationInfo) *fyne.Container {
+	weatherData, err := types.GetRainByStationDuck(db, station.NumPost)
 
 	if err != nil {
 		dialog.NewError(err, w)
@@ -393,7 +390,7 @@ func truncate(s string, max int) string {
 	return string(truncated) + "..."
 }
 
-func getStationByName(stations []types.StationModel, name string) (*types.StationModel, error) {
+func getStationByName(stations []types.StationInfo, name string) (*types.StationInfo, error) {
 	for _, station := range stations {
 		if strings.EqualFold(station.CommonName, name) {
 			return &station, nil

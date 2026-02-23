@@ -3,6 +3,7 @@ package types
 import (
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +13,21 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-func InitDuckDB(dpPath string) (*sql.DB, error) {
+type StationInfo struct {
+	NumPost    string
+	CommonName string
+	Lat        float64
+	Lon        float64
+	Alti       float64
+}
+
+type RainByStation struct {
+	NumPost string
+	Year    string
+	Rain    float64
+}
+
+func InitDuckDB() (*sql.DB, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, err
@@ -21,39 +36,24 @@ func InitDuckDB(dpPath string) (*sql.DB, error) {
 }
 
 func DownloadParquetFile(dpt string) error {
-	metadata, err := readDataGouvFile()
+	parquetResources, err := fetchDataGouvDataset(dpt)
 	if err != nil {
 		return err
 	}
 
-	for _, m := range metadata {
-		// file for this dpt
-		if strings.Contains(m.title, fmt.Sprintf("_%s_", dpt)) {
-			// we want 1950 to 2022 and 2022 to 2023 file (name doesnt change but they are up to date)
-			if (strings.Contains(m.title, "1950") || strings.Contains(m.title, "2022")) && !strings.Contains(m.title, "autres-parametres") {
-				parquetUrl := fmt.Sprintf("https://object.files.data.gouv.fr/hydra-parquet/hydra-parquet/%s.parquet", m.id)
-
-				// check we dont already injected this file
-				if len(dpt) == 1 {
-					dpt = "0" + dpt
-				}
-
-				// stmt, err := db.Prepare("SELECT count(1) FROM file_processed WHERE department LIKE ?")
-				// stmt.Exec(dpt)
-
-				out, err := os.Create(fmt.Sprintf("data/%s.parquet", m.id))
-				if err != nil {
-					break
-				}
-				defer out.Close()
-				resp, err := http.Get(parquetUrl)
-				if err != nil {
-					break
-				}
-				_, err = io.Copy(out, resp.Body)
-				fmt.Printf("File %s downloaded\n", parquetUrl)
-			}
+	for _, resource := range parquetResources {
+		out, err := os.Create(fmt.Sprintf("data/parquet/%s.parquet", resource.id))
+		if err != nil {
+			break
 		}
+		defer out.Close()
+		resp, err := http.Get(resource.parquetUrl)
+		if err != nil {
+			break
+		}
+		_, err = io.Copy(out, resp.Body)
+		fmt.Printf("File %s downloaded\n", resource.id)
+
 	}
 
 	return nil
@@ -68,8 +68,8 @@ type StationRain struct {
 
 func GetRainByStationDuck(db *sql.DB, numPost string) ([]RainByStation, error) {
 	stmt, err := db.Prepare(`
-		SELECT NUM_POSTE, substr(AAAAMMJJ, 1, 4) as YEAR, sum(RR) as RAIN
-		FROM read_parquet('data/*.parquet')
+		SELECT NUM_POSTE, substr(CAST(AAAAMMJJ AS VARCHAR), 1, 4) as YEAR, sum(RR) as RAIN
+		FROM read_parquet('data/parquet/*.parquet')
 		WHERE CAST(NUM_POSTE AS VARCHAR) = ?
 		GROUP BY NUM_POSTE, YEAR
 		HAVING count(1) > 365 * 0.95
@@ -108,7 +108,7 @@ func GetRainByStationDuck(db *sql.DB, numPost string) ([]RainByStation, error) {
 }
 
 func GetStationRain(db *sql.DB, station string) []StationRain {
-	stmt, err := db.Prepare("SELECT NUM_POSTE, NOM_USUEL, AAAAMMJJ, RR FROM read_parquet('data/*.parquet') WHERE CAST(NUM_POSTE AS VARCHAR) LIKE ?")
+	stmt, err := db.Prepare("SELECT NUM_POSTE, NOM_USUEL, AAAAMMJJ, RR FROM read_parquet('data/parquet/*.parquet') WHERE CAST(NUM_POSTE AS VARCHAR) LIKE ?")
 	if err != nil {
 		return nil
 	}
@@ -141,16 +141,16 @@ func GetStationRain(db *sql.DB, station string) []StationRain {
 	return response
 }
 
-func GetStations(db *sql.DB) []StationInfo {
-	stmt, err := db.Prepare("SELECT DISTINCT NUM_POSTE, NOM_USUEL, LAT, LONG, ALTI FROM read_parquet('data/*.parquet')")
+func GetStations(db *sql.DB) ([]StationInfo, error) {
+	stmt, err := db.Prepare("SELECT DISTINCT NUM_POSTE, NOM_USUEL, LAT, LON, ALTI FROM read_parquet('data/parquet/*.parquet')")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	rows, err := stmt.Query()
 
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var numPoste, nomUsuel string
@@ -173,23 +173,28 @@ func GetStations(db *sql.DB) []StationInfo {
 		}
 	}
 
-	return response
+	return response, nil
 }
 
-func GetClosestStationDuck(db *sql.DB, lat, long float64) *StationInfo {
-	stmt, err := db.Prepare("SELECT num_post, common_name, long, lat FROM station_models ORDER BY (lat - ?)*(lat - ?) + (long - ?)*(long - ?) LIMIT 1")
+func GetClosestStationDuck(db *sql.DB, lat, long float64) (*StationInfo, error) {
+	stmt, err := db.Prepare(`
+		SELECT NUM_POSTE, NOM_USUEL, LON, LAT, ALTI, ((LAT - ?) * 111)*((LAT - ?)*111) + ((LON - ?)*111*COS((LON + ?) / 2))*((LON - ?)*111*COS((LON + ?) / 2)) as D
+		FROM read_parquet('data/parquet/*.parquet') 
+		WHERE D < 10*10
+		ORDER BY D LIMIT 1
+	`)
 
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var numPoste, nomUsuel string
-	var latPoste, longPoste, alti float64
+	var latPoste, longPoste, alti, d float64
 
-	rows := stmt.QueryRow(lat, lat, long, long)
-	err = rows.Scan(&numPoste, &nomUsuel, &lat, &long, &alti)
+	rows := stmt.QueryRow(lat, lat, long, long, long, long)
+	err = rows.Scan(&numPoste, &nomUsuel, &latPoste, &longPoste, &alti, &d)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	return &StationInfo{
@@ -198,7 +203,7 @@ func GetClosestStationDuck(db *sql.DB, lat, long float64) *StationInfo {
 		Lat:        latPoste,
 		Lon:        longPoste,
 		Alti:       alti,
-	}
+	}, nil
 
 }
 
@@ -234,4 +239,57 @@ func readDataGouvFile() ([]DataGouvFile, error) {
 	}
 
 	return data, nil
+}
+
+type DatasetResource struct {
+	Description string            `json:"description"`
+	Extras      map[string]string `json:"extras"`
+	Id          string            `json:"id"`
+}
+
+type DataGouvDataset struct {
+	Resources []DatasetResource `json:"resources"`
+}
+
+type WeatherResource struct {
+	parquetUrl, id string
+}
+
+func fetchDataGouvDataset(dpt string) ([]WeatherResource, error) {
+	rainDatasetId := "6569b51ae64326786e4e8e1a"
+	url := fmt.Sprintf("https://www.data.gouv.fr/api/1/datasets/%s/", rainDatasetId)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	var dataset DataGouvDataset
+	json.NewDecoder(resp.Body).Decode(&dataset)
+
+	if len(dpt) == 1 {
+		dpt = "0" + dpt
+	}
+
+	response := make([]WeatherResource, 0)
+
+	for _, resource := range dataset.Resources {
+		if strings.Contains(resource.Description, fmt.Sprintf("département %s", dpt)) {
+			if (strings.Contains(resource.Description, "1950") || strings.Contains(resource.Description, "2022")) && !strings.Contains(resource.Description, "autres-parametres") {
+				response = append(response, WeatherResource{
+					parquetUrl: resource.Extras["analysis:parsing:parquet_url"],
+					id:         resource.Id,
+				})
+			}
+		}
+	}
+
+	return response, nil
 }
