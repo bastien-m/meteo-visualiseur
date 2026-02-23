@@ -15,8 +15,11 @@ import (
 )
 
 type HomeMap struct {
-	logger    *slog.Logger
-	dimension common.Dimension
+	logger       *slog.Logger
+	dimension    common.Dimension
+	geoData      *data.GeoData
+	iMap         *ui.InteractiveMap
+	stationLayer *canvas.Image
 }
 
 func InitHomeMap(logger *slog.Logger, dimension common.Dimension) *HomeMap {
@@ -31,12 +34,27 @@ func (h *HomeMap) Render() *ui.InteractiveMap {
 	geoData := &data.GeoData{
 		FranceGeoJSON: geojson,
 	}
+	geoData.SetBounds()
+	h.geoData = geoData
+
 	mapImg := h.renderMap(geoData, h.dimension)
-	return ui.NewInteractiveMap(mapImg, h.dimension.Width, h.dimension.Height)
+	h.iMap = ui.NewInteractiveMap(mapImg, h.dimension.Width, h.dimension.Height)
+	return h.iMap
+}
+
+func (h *HomeMap) AddStationsLayer(stations []data.StationInfo) {
+	stationsImg := renderStations(stations, h.dimension, *h.geoData.Bounds)
+	h.iMap.RemoveLayer(h.stationLayer)
+	h.iMap.AddLayer(stationsImg)
+	h.stationLayer = stationsImg
+}
+
+func (h *HomeMap) ProjectFromXY(x, y float64) (lon, lat float64) {
+	return projectionFromXY(h.dimension, *h.geoData.Bounds, x, y)
 }
 
 func readGeoJsonFile(logger *slog.Logger) data.FranceGeoJSON {
-	filepath := "./data/metropole-version-simplifiee.geojson"
+	filepath := "./data/geo/metropole-version-simplifiee.geojson"
 	file, err := os.ReadFile(filepath)
 	if err != nil {
 		logger.Error("Can't read file", "error", err, "filepath", filepath)
@@ -68,7 +86,6 @@ func (h *HomeMap) renderMap(g *data.GeoData, d common.Dimension) *canvas.Image {
 					dc.LineTo(float64(x), float64(y))
 				}
 				prevX, prevY = x, y
-
 			}
 			dc.ClosePath()
 			dc.Stroke()
@@ -80,9 +97,30 @@ func (h *HomeMap) renderMap(g *data.GeoData, d common.Dimension) *canvas.Image {
 	return img
 }
 
+func renderStations(stations []data.StationInfo, d common.Dimension, b data.Bounds) *canvas.Image {
+	dc := gg.NewContext(int(d.Width), int(d.Height))
+	dc.SetColor(color.White)
+	dc.SetLineWidth(2)
+
+	for _, station := range stations {
+		x, y := projection(station.Lon, station.Lat, d, b)
+		dc.DrawCircle(float64(x), float64(y), 0.5)
+		dc.Fill()
+	}
+
+	img := canvas.NewImageFromImage(dc.Image())
+	img.FillMode = canvas.ImageFillContain
+	return img
+}
+
 func projection(long, lat float64, d common.Dimension, b data.Bounds) (x, y int) {
 	x = int(math.Round((long - b.MinLong) * d.Width / (b.MaxLong - b.MinLong)))
 	y = int(math.Round(d.Height - (lat-b.MinLat)*d.Height/(b.MaxLat-b.MinLat)))
-
 	return x, y
+}
+
+func projectionFromXY(d common.Dimension, b data.Bounds, x, y float64) (lon, lat float64) {
+	lon = b.MinLong + ((b.MaxLong - b.MinLong) / d.Width * x)
+	lat = b.MinLat + ((b.MaxLat - b.MinLat) / d.Height * (d.Height - y))
+	return lon, lat
 }

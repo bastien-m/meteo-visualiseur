@@ -14,6 +14,7 @@ type HomeSidebar struct {
 	window               fyne.Window
 	stationList          binding.List[string]
 	HandleLoadDepartment func(dpt string)
+	HandleSelectStation  func(name string)
 }
 
 func InitHomeSidebar(window fyne.Window, stationList binding.List[string]) *HomeSidebar {
@@ -30,7 +31,17 @@ func (hs *HomeSidebar) Render() *fyne.Container {
 			stations, _ := hs.stationList.Get()
 			selectStation.SetOptions(stations)
 		}))
+	}
 
+	selectStation.OnChanged = func(v string) {
+		stations, _ := hs.stationList.Get()
+		selectStation.SetOptions(findStationsByPrefix(stations, v))
+	}
+
+	selectStation.OnSubmitted = func(v string) {
+		if hs.HandleSelectStation != nil {
+			hs.HandleSelectStation(v)
+		}
 	}
 
 	return container.NewVBox(
@@ -50,5 +61,14 @@ func (hs *HomeSidebar) Render() *fyne.Container {
 		widget.NewLabel("Sélectionnez une station"),
 		selectStation,
 	)
+}
 
+func findStationsByPrefix(stations []string, prefix string) []string {
+	matches := make([]string, 0, 10)
+	for _, station := range stations {
+		if strings.HasPrefix(station, prefix) {
+			matches = append(matches, station)
+		}
+	}
+	return matches
 }
