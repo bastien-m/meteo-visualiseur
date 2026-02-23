@@ -1,4 +1,4 @@
-package types
+package data
 
 import (
 	"math"
@@ -21,7 +21,7 @@ type Bounds struct {
 	MinLong, MaxLong, MinLat, MaxLat float64
 }
 
-func (g *GeoData) GetBounds() *Bounds {
+func (g *GeoData) SetBounds() {
 	bounds := &Bounds{
 		MinLong: math.MaxFloat64,
 		MaxLong: -math.MaxFloat64,
@@ -51,5 +51,6 @@ func (g *GeoData) GetBounds() *Bounds {
 			}
 		}
 	}
-	return bounds
+
+	g.Bounds = bounds
 }

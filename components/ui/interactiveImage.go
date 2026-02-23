@@ -1,6 +1,7 @@
-package components
+package ui
 
 import (
+	"fmt"
 	"image/color"
 	"time"
 
@@ -23,19 +24,38 @@ type InteractiveMap struct {
 
 var _ desktop.Hoverable = (*InteractiveMap)(nil)
 
-func NewInteractiveMap(img *canvas.Image, width, height float32) *InteractiveMap {
+func NewInteractiveMap(img *canvas.Image, width, height float64) *InteractiveMap {
 	tooltip := canvas.NewText("", color.White)
 	tooltip.TextSize = 12
 	tooltip.Hidden = true
 
-	m := &InteractiveMap{image: img, size: fyne.NewSize(width, height), tooltip: tooltip}
+	m := &InteractiveMap{image: img, size: fyne.NewSize(float32(width), float32(height)), tooltip: tooltip}
 	m.ExtendBaseWidget(m)
 	return m
 }
 
 func (m *InteractiveMap) AddLayer(img *canvas.Image) {
 	m.layers = append(m.layers, img)
+	fmt.Printf("number of layers %d", len(m.layers))
 	m.Refresh()
+}
+
+func (m *InteractiveMap) RemoveLayer(img *canvas.Image) {
+	layerIndex := -1
+	for i := range m.layers {
+		if m.layers[i] == img {
+			layerIndex = i
+			break
+		}
+	}
+
+	if layerIndex != -1 {
+		// remove the layer
+		copy(m.layers[layerIndex:], m.layers[layerIndex+1:])
+		m.layers[len(m.layers)-1] = nil // avoid memory leak
+		m.layers = m.layers[:len(m.layers)-1]
+	}
+
 }
 
 func (m *InteractiveMap) MinSize() fyne.Size {

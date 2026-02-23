@@ -7,8 +7,9 @@ import (
 	"image/color"
 	"log/slog"
 	"math"
-	"meteo/components"
-	"meteo/types"
+	"meteo/common"
+	"meteo/components/ui"
+	"meteo/data"
 	"os"
 	"slices"
 	"strings"
@@ -24,16 +25,12 @@ import (
 	"github.com/fogleman/gg"
 )
 
-type Dimension struct {
-	width, height float64
-}
-
 const (
 	mapHeight = 600
 	mapWidth  = 600
 )
 
-func main() {
+func createLogger() *slog.Logger {
 	file, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		panic(err)
@@ -41,6 +38,72 @@ func main() {
 	defer file.Close()
 
 	logger := slog.New(slog.NewJSONHandler(file, nil))
+
+	return logger
+}
+
+func buildInteractiveMap(geoData *data.GeoData) *ui.InteractiveMap {
+	mapDimension := common.Dimension{Width: float64(mapWidth), Height: float64(mapHeight)}
+	geoData.Bounds = geoData.GetBounds()
+	mapImg := renderMap(geoData, mapDimension)
+	return ui.NewInteractiveMap(mapImg, mapWidth, mapHeight)
+}
+
+func refreshUIWithNewData(
+	interactiveMap *ui.InteractiveMap,
+	stationBindings binding.List[string],
+	stations []types.StationInfo,
+	bounds types.Bounds,
+) {
+	mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
+	stationsImg := renderStations(stations, mapDimension, bounds)
+	interactiveMap.AddLayer(stationsImg)
+
+	stationBindings.Set(stationsNameList(stations))
+}
+
+func HandleLoadDepartment(db *sql.DB, stations *[]types.StationInfo, department string, w fyne.Window) {
+	progress := dialog.NewCustomWithoutButtons("Import en cours",
+		container.NewVBox(
+			widget.NewLabel(fmt.Sprintf("Import du département %s...", department)),
+			widget.NewProgressBarInfinite(),
+		), w)
+	progress.Show()
+
+	go func() {
+		if len(department) == 1 {
+			department = "0" + department
+		}
+		err := types.DownloadParquetFile(department)
+
+		if err != nil {
+			fyne.Do(func() {
+				progress.Hide()
+				dialog.ShowError(err, w)
+			})
+			return
+		}
+		newStations, err := types.GetStations(db)
+		if err != nil {
+			fyne.Do(func() {
+				progress.Hide()
+				dialog.ShowError(err, w)
+			})
+			return
+		}
+
+		stations = slices.Concat(stations, newStations)
+
+		fyne.Do(func() {
+			refreshUIWithNewData(interactiveMap, stationNames, stations, *geoData.Bounds)
+			progress.Hide()
+			dialog.ShowInformation("Import terminé", fmt.Sprintf("Département %s importé avec succès", department), w)
+		})
+	}()
+}
+
+func main() {
+	logger := createLogger()
 
 	logger.Info("Démarrage de l'App")
 
@@ -57,30 +120,17 @@ func main() {
 	geoData := &types.GeoData{
 		FranceGeoJSON: geojson,
 	}
-
-	stations := make([]types.StationInfo, 0, 100)
+	interactiveMap := buildInteractiveMap(geoData)
 
 	w.Resize(fyne.NewSize(500, 500))
 
-	mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
-	geoData.Bounds = geoData.GetBounds()
-	mapImg := renderMap(geoData, mapDimension)
-	interactiveMap := components.NewInteractiveMap(mapImg, mapWidth, mapHeight)
-
+	stations := make([]types.StationInfo, 0, 100)
 	stationNames := binding.NewStringList()
 	selectStation := widget.NewSelectEntry([]string{})
-
 	stationNames.AddListener(binding.NewDataListener(func() {
 		names, _ := stationNames.Get()
 		selectStation.SetOptions(names)
 	}))
-
-	refreshMap := func() {
-		stationsImg := renderStations(stations, mapDimension, *geoData.Bounds)
-		interactiveMap.AddLayer(stationsImg)
-
-		stationNames.Set(stationsNameList(stations))
-	}
 
 	loadDepartment := func(department string) {
 		progress := dialog.NewCustomWithoutButtons("Import en cours",
@@ -115,7 +165,7 @@ func main() {
 			stations = slices.Concat(stations, newStations)
 
 			fyne.Do(func() {
-				refreshMap()
+				refreshUIWithNewData(interactiveMap, stationNames, stations, *geoData.Bounds)
 				progress.Hide()
 				dialog.ShowInformation("Import terminé", fmt.Sprintf("Département %s importé avec succès", department), w)
 			})
@@ -136,7 +186,7 @@ func main() {
 			dialog.NewError(err, w)
 		} else {
 			stations = existingStations
-			refreshMap()
+			refreshUIWithNewData(interactiveMap, stationNames, stations, *geoData.Bounds)
 			progress.Hide()
 
 			dialog.ShowInformation("Import terminé", "Département(s) importé(s) avec succès", w)
@@ -196,6 +246,7 @@ func main() {
 		if len(stations) == 0 {
 			return ""
 		}
+		mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
 		long, lat := projectionFromXY(
 			mapDimension,
 			*geoData.Bounds,
@@ -211,6 +262,7 @@ func main() {
 	}
 
 	interactiveMap.OnTap = func(pos fyne.Position) {
+		mapDimension := Dimension{width: float64(mapWidth), height: float64(mapHeight)}
 		long, lat := projectionFromXY(
 			mapDimension,
 			*geoData.Bounds,
