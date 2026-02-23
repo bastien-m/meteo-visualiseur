@@ -1,7 +1,9 @@
 .vscode/*
 !.vscode/settings.json
 
-data
+data/*
+!data/liens-datagouv-meteo.csv
+!data/liens-geojson.csv
 app.log
 
 *.db
