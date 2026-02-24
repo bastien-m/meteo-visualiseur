@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	appcontext "meteo/context"
 	"meteo/data"
 	"meteo/screens"
 	"os"
@@ -24,7 +25,7 @@ func main() {
 	logger := createLogger()
 	logger.Info("Démarrage de l'App")
 
-	db, err := data.InitDuckDB()
+	db, err := data.InitDB()
 	if err != nil {
 		logger.Error("Can't init database", "error", err)
 		panic(err)
@@ -32,9 +33,10 @@ func main() {
 
 	a := app.New()
 	w := a.NewWindow("Météo")
+	appcontext.SetAppContext(w, db, logger)
 	w.Resize(fyne.NewSize(500, 500))
 
-	screen := screens.InitHomeScreen(logger, db, w)
+	screen := screens.InitHomeScreen()
 	w.SetContent(screen.Render())
 
 	screen.LoadExistingData()

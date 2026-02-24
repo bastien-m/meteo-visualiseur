@@ -27,7 +27,7 @@ type RainByStation struct {
 	Rain    float64
 }
 
-func InitDuckDB() (*sql.DB, error) {
+func InitDB() (*sql.DB, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, err
@@ -66,9 +66,9 @@ type StationRain struct {
 	RR        float64
 }
 
-func GetRainByStationDuck(db *sql.DB, numPost string) ([]RainByStation, error) {
+func GetRainByStation(db *sql.DB, numPost string) ([]RainByStation, error) {
 	stmt, err := db.Prepare(`
-		SELECT NUM_POSTE, substr(CAST(AAAAMMJJ AS VARCHAR), 1, 4) as YEAR, sum(RR) as RAIN
+		SELECT NUM_POSTE, substr(CAST(AAAAMMJJ AS VARCHAR), 1, 4) as YEAR, sum(CAST(RR AS DOUBLE)) as RAIN
 		FROM read_parquet('data/parquet/*.parquet')
 		WHERE CAST(NUM_POSTE AS VARCHAR) = ?
 		GROUP BY NUM_POSTE, YEAR
@@ -176,7 +176,7 @@ func GetStations(db *sql.DB) ([]StationInfo, error) {
 	return response, nil
 }
 
-func GetClosestStationDuck(db *sql.DB, lat, long float64) (*StationInfo, error) {
+func GetClosestStation(db *sql.DB, lat, long float64) (*StationInfo, error) {
 	stmt, err := db.Prepare(`
 		SELECT NUM_POSTE, NOM_USUEL, LON, LAT, ALTI, ((LAT - ?) * 111)*((LAT - ?)*111) + ((LON - ?)*111*COS((LON + ?) / 2))*((LON - ?)*111*COS((LON + ?) / 2)) as D
 		FROM read_parquet('data/parquet/*.parquet') 
