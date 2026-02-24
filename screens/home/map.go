@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"image/color"
 	"log/slog"
-	"math"
 	"meteo/common"
 	"meteo/components/ui"
 	"meteo/data"
@@ -50,7 +49,7 @@ func (h *HomeMap) AddStationsLayer(stations []data.StationInfo) {
 }
 
 func (h *HomeMap) ProjectFromXY(x, y float64) (lon, lat float64) {
-	return projectionFromXY(h.dimension, *h.geoData.Bounds, x, y)
+	return common.ProjectionFromXY(h.dimension, *h.geoData.Bounds, x, y)
 }
 
 func readGeoJsonFile(logger *slog.Logger) data.FranceGeoJSON {
@@ -80,7 +79,7 @@ func (h *HomeMap) renderMap(g *data.GeoData, d common.Dimension) *canvas.Image {
 			for k := range g.Geometry.Coordinates[i][j] {
 				outline := g.Geometry.Coordinates[i][j][k]
 
-				x, y := projection(outline[0], outline[1], h.dimension, *g.Bounds)
+				x, y := common.Projection(outline[0], outline[1], h.dimension, *g.Bounds)
 				if k != 0 {
 					dc.MoveTo(float64(prevX), float64(prevY))
 					dc.LineTo(float64(x), float64(y))
@@ -103,7 +102,7 @@ func renderStations(stations []data.StationInfo, d common.Dimension, b data.Boun
 	dc.SetLineWidth(2)
 
 	for _, station := range stations {
-		x, y := projection(station.Lon, station.Lat, d, b)
+		x, y := common.Projection(station.Lon, station.Lat, d, b)
 		dc.DrawCircle(float64(x), float64(y), 0.5)
 		dc.Fill()
 	}
@@ -111,16 +110,4 @@ func renderStations(stations []data.StationInfo, d common.Dimension, b data.Boun
 	img := canvas.NewImageFromImage(dc.Image())
 	img.FillMode = canvas.ImageFillContain
 	return img
-}
-
-func projection(long, lat float64, d common.Dimension, b data.Bounds) (x, y int) {
-	x = int(math.Round((long - b.MinLong) * d.Width / (b.MaxLong - b.MinLong)))
-	y = int(math.Round(d.Height - (lat-b.MinLat)*d.Height/(b.MaxLat-b.MinLat)))
-	return x, y
-}
-
-func projectionFromXY(d common.Dimension, b data.Bounds, x, y float64) (lon, lat float64) {
-	lon = b.MinLong + ((b.MaxLong - b.MinLong) / d.Width * x)
-	lat = b.MinLat + ((b.MaxLat - b.MinLat) / d.Height * (d.Height - y))
-	return lon, lat
 }

@@ -59,57 +59,16 @@ func InitHomeScreen(logger *slog.Logger, db *sql.DB, w fyne.Window) *HomeScreen 
 
 func (h *HomeScreen) Render() fyne.CanvasObject {
 	iMap := h.homeMap.Render()
-
 	mw := container.NewMultipleWindows()
 
-	showStationWindow := func(station *data.StationInfo) {
-		content := buildStationMetadataDisplay(h.db, h.window, station)
-		if content != nil {
-			wrapped := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
-			iw := container.NewInnerWindow(station.CommonName, wrapped)
-			iw.CloseIntercept = func() {
-				for i, win := range mw.Windows {
-					if win == iw {
-						mw.Windows = append(mw.Windows[:i], mw.Windows[i+1:]...)
-						break
-					}
-				}
-				mw.Refresh()
-			}
-			mw.Windows = append(mw.Windows, iw)
-			mw.Refresh()
-		}
-	}
-
-	iMap.OnHover = func(pos fyne.Position) string {
-		if len(h.stations) == 0 {
-			return ""
-		}
-		lon, lat := h.homeMap.ProjectFromXY(float64(pos.X), float64(pos.Y))
-		station, err := data.GetClosestStationDuck(h.db, lat, lon)
-		if err != nil {
-			return ""
-		}
-		return station.CommonName
-	}
-
+	// handlers
+	iMap.OnHover = h.handleMapHovered
 	iMap.OnTap = func(pos fyne.Position) {
-		lon, lat := h.homeMap.ProjectFromXY(float64(pos.X), float64(pos.Y))
-		station, err := data.GetClosestStationDuck(h.db, lat, lon)
-		if err != nil {
-			dialog.NewError(err, h.window)
-			return
-		}
-		showStationWindow(station)
+		h.handleMapTapped(pos, mw)
 	}
 
 	h.sidebar.HandleSelectStation = func(name string) {
-		station, err := getStationByName(h.stations, name)
-		if err != nil {
-			dialog.NewError(err, h.window)
-			return
-		}
-		showStationWindow(station)
+		h.handleSelectStation(name, mw)
 	}
 
 	mapWithWindows := container.NewStack(iMap, mw)
@@ -117,6 +76,56 @@ func (h *HomeScreen) Render() fyne.CanvasObject {
 	split.Offset = 0.33
 
 	return split
+}
+
+func (h *HomeScreen) handleSelectStation(name string, mw *container.MultipleWindows) {
+	station, err := getStationByName(h.stations, name)
+	if err != nil {
+		dialog.NewError(err, h.window)
+		return
+	}
+	h.handleStationWindow(station, mw)
+}
+
+func (h *HomeScreen) handleMapTapped(pos fyne.Position, mw *container.MultipleWindows) {
+	lon, lat := h.homeMap.ProjectFromXY(float64(pos.X), float64(pos.Y))
+	station, err := data.GetClosestStationDuck(h.db, lat, lon)
+	if err != nil {
+		dialog.NewError(err, h.window)
+		return
+	}
+	h.handleStationWindow(station, mw)
+}
+
+func (h *HomeScreen) handleMapHovered(pos fyne.Position) string {
+	if len(h.stations) == 0 {
+		return ""
+	}
+	lon, lat := h.homeMap.ProjectFromXY(float64(pos.X), float64(pos.Y))
+	station, err := data.GetClosestStationDuck(h.db, lat, lon)
+	if err != nil {
+		return ""
+	}
+	return station.CommonName
+}
+
+func (h *HomeScreen) handleStationWindow(station *data.StationInfo, mw *container.MultipleWindows) {
+	content := buildStationMetadataDisplay(h.db, h.window, station)
+	if content != nil {
+		wrapped := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
+		iw := container.NewInnerWindow(station.CommonName, wrapped)
+		iw.CloseIntercept = func() {
+			for i, win := range mw.Windows {
+				if win == iw {
+					mw.Windows = append(mw.Windows[:i], mw.Windows[i+1:]...)
+					break
+				}
+			}
+			mw.Refresh()
+		}
+		mw.Windows = append(mw.Windows, iw)
+		mw.Refresh()
+	}
 }
 
 func (h *HomeScreen) LoadExistingData() {
