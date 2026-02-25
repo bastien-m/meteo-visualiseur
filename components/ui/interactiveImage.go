@@ -1,14 +1,21 @@
 package ui
 
 import (
-	"fmt"
 	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+)
+
+type MapMode int
+
+const (
+	NORMAL MapMode = iota
+	MOVE
 )
 
 type InteractiveMap struct {
@@ -20,23 +27,84 @@ type InteractiveMap struct {
 	hoverTimer *time.Timer
 	OnTap      func(pos fyne.Position)
 	OnHover    func(pos fyne.Position) string
+	dragCursor *canvas.Image
+	panCursor  *canvas.Image
+	mapMode    binding.Int
+	isDragging bool
 }
 
 var _ desktop.Hoverable = (*InteractiveMap)(nil)
+var _ desktop.Cursorable = (*InteractiveMap)(nil)
 
-func NewInteractiveMap(img *canvas.Image, width, height float64) *InteractiveMap {
+func NewInteractiveMap(
+	img *canvas.Image,
+	width, height float64,
+	mapMode binding.Int,
+) *InteractiveMap {
 	tooltip := canvas.NewText("", color.White)
 	tooltip.TextSize = 12
 	tooltip.Hidden = true
 
-	m := &InteractiveMap{image: img, size: fyne.NewSize(float32(width), float32(height)), tooltip: tooltip}
+	cursorSize := fyne.NewSize(32, 32)
+	dragCursor := canvas.NewImageFromResource(ResourceDragPng)
+	dragCursor.Resize(cursorSize)
+	dragCursor.Hidden = true
+
+	panCursor := canvas.NewImageFromResource(ResourcePanPng)
+	panCursor.Resize(cursorSize)
+	panCursor.Hidden = true
+
+	m := &InteractiveMap{
+		image:      img,
+		size:       fyne.NewSize(float32(width), float32(height)),
+		tooltip:    tooltip,
+		isDragging: false,
+		dragCursor: dragCursor,
+		panCursor:  panCursor,
+		mapMode:    mapMode,
+	}
 	m.ExtendBaseWidget(m)
+
 	return m
+}
+func (m *InteractiveMap) Dragged(e *fyne.DragEvent) {
+	mode, _ := m.mapMode.Get()
+	switch MapMode(mode) {
+	case NORMAL:
+		m.isDragging = false
+		m.dragCursor.Hidden = true
+		m.dragCursor.Refresh()
+		m.panCursor.Hidden = true
+		m.panCursor.Refresh()
+	case MOVE:
+		m.isDragging = true
+		offset := fyne.NewPos(-16, -16)
+		cursorPos := e.Position.Add(offset)
+		m.dragCursor.Move(cursorPos)
+		m.dragCursor.Hidden = false
+		m.dragCursor.Refresh()
+		m.panCursor.Hidden = true
+		m.panCursor.Refresh()
+	}
+
+	// TODO: move camera here
+}
+
+func (m *InteractiveMap) DragEnd() {
+	m.isDragging = false
+	m.Refresh()
+}
+
+func (m *InteractiveMap) Cursor() desktop.Cursor {
+	mode, _ := m.mapMode.Get()
+	if MapMode(mode) == MOVE {
+		return desktop.HiddenCursor
+	}
+	return desktop.DefaultCursor
 }
 
 func (m *InteractiveMap) AddLayer(img *canvas.Image) {
 	m.layers = append(m.layers, img)
-	fmt.Printf("number of layers %d", len(m.layers))
 	m.Refresh()
 }
 
@@ -73,10 +141,33 @@ func (m *InteractiveMap) MouseIn(ev *desktop.MouseEvent) {
 }
 
 func (m *InteractiveMap) MouseMoved(ev *desktop.MouseEvent) {
-	m.updateTooltip(ev.Position)
+	offset := fyne.NewPos(-16, -16)
+	cursorPos := ev.Position.Add(offset)
+	currentMapMode, _ := m.mapMode.Get()
+	if MapMode(currentMapMode) == MOVE {
+		if m.isDragging {
+			m.dragCursor.Move(cursorPos)
+			m.dragCursor.Hidden = false
+			m.dragCursor.Refresh()
+			m.panCursor.Hidden = true
+			m.panCursor.Refresh()
+		} else {
+			m.panCursor.Move(cursorPos)
+			m.panCursor.Hidden = false
+			m.panCursor.Refresh()
+			m.dragCursor.Hidden = true
+			m.dragCursor.Refresh()
+		}
+	} else {
+		m.updateTooltip(ev.Position)
+	}
 }
 
 func (m *InteractiveMap) MouseOut() {
+	m.dragCursor.Hidden = true
+	m.dragCursor.Refresh()
+	m.panCursor.Hidden = true
+	m.panCursor.Refresh()
 	m.tooltip.Hidden = true
 	m.tooltip.Refresh()
 }
@@ -104,15 +195,14 @@ func (m *InteractiveMap) updateTooltip(pos fyne.Position) {
 	})
 }
 
-func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
-	return &mapRenderer{m: m}
-}
-
+type mapRendererOwner = InteractiveMap
 type mapRenderer struct {
 	m *mapRendererOwner
 }
 
-type mapRendererOwner = InteractiveMap
+func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
+	return &mapRenderer{m: m}
+}
 
 func (r *mapRenderer) Layout(size fyne.Size) {
 	r.m.image.Resize(size)
@@ -133,6 +223,8 @@ func (r *mapRenderer) Refresh() {
 		l.Refresh()
 	}
 	r.m.tooltip.Refresh()
+	r.m.dragCursor.Refresh()
+	r.m.panCursor.Refresh()
 }
 
 func (r *mapRenderer) Objects() []fyne.CanvasObject {
@@ -140,7 +232,7 @@ func (r *mapRenderer) Objects() []fyne.CanvasObject {
 	for _, l := range r.m.layers {
 		objs = append(objs, l)
 	}
-	objs = append(objs, r.m.tooltip)
+	objs = append(objs, r.m.tooltip, r.m.dragCursor, r.m.panCursor)
 	return objs
 }
 
