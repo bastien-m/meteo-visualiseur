@@ -28,4 +28,18 @@ Afficher le comparatif entre 2 villes
 
 ## V3
 
-Possibilité d'afficher une hitmap
+![capture écran](doc/V3.png)
+![capture écran](doc/V3-window.png)
+
+Refonte technique complète
+
+- utilisation de fyne en lib graphique
+- téléchargement des données depuis data.gouv directement via l'app
+- stockage des données au format parquet (compressé)
+- utilisation de duckdb pour interroger les données
+
+Carte intéractive
+
+- zoom/dezoom
+- Déplacer la carte
+- Fenêtrage pour afficher les informations des stations
