@@ -19,6 +19,7 @@ import (
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/fogleman/gg"
 )
@@ -114,6 +115,19 @@ func (h *HomeMap) createMapActions() *fyne.Container {
 		}
 	})
 
+	zoomInButton := widget.NewButtonWithIcon("Zoom In", theme.ZoomInIcon(), func() {
+		h.camera.Z += 0.1
+		h.needMapRefresh.Set(true)
+	})
+
+	zoomOutButton := widget.NewButtonWithIcon("Zoom Out", theme.ZoomOutIcon(), func() {
+		if h.camera.Z == 0.1 {
+			return
+		}
+		h.camera.Z -= 0.1
+		h.needMapRefresh.Set(true)
+	})
+
 	h.mapMode.AddListener(binding.NewDataListener(func() {
 		mode, _ := h.mapMode.Get()
 		switch ui.MapMode(mode) {
@@ -124,7 +138,7 @@ func (h *HomeMap) createMapActions() *fyne.Container {
 		}
 	}))
 
-	actions := container.NewVBox(moveMapButton)
+	actions := container.NewVBox(moveMapButton, zoomInButton, zoomOutButton)
 	return container.NewHBox(layout.NewSpacer(), actions)
 }
 
@@ -152,7 +166,7 @@ func readGeoJsonFile(logger *slog.Logger) data.FranceGeoJSON {
 }
 
 func (h *HomeMap) renderMap(g *data.GeoData) *canvas.Image {
-	var prevX, prevY int
+	var prevX, prevY float64
 
 	dc := gg.NewContext(int(h.dimension.Width), int(h.dimension.Height))
 	dc.SetColor(color.White)
@@ -165,8 +179,8 @@ func (h *HomeMap) renderMap(g *data.GeoData) *canvas.Image {
 
 				x, y := common.Projection(outline[0], outline[1], h.camera, h.dimension, *g.Bounds)
 				if k != 0 {
-					dc.MoveTo(float64(prevX), float64(prevY))
-					dc.LineTo(float64(x), float64(y))
+					dc.MoveTo(prevX, prevY)
+					dc.LineTo(x, y)
 				}
 				prevX, prevY = x, y
 			}
@@ -187,7 +201,7 @@ func (h *HomeMap) renderStations(stations []data.StationInfo) *canvas.Image {
 
 	for _, station := range stations {
 		x, y := common.Projection(station.Lon, station.Lat, h.camera, h.dimension, *h.geoData.Bounds)
-		dc.DrawCircle(float64(x), float64(y), 0.5)
+		dc.DrawCircle(x, y, 0.5)
 		dc.Fill()
 	}
 
