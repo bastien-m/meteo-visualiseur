@@ -12,7 +12,7 @@ func Projection(long, lat float64, c Position, d Dimension, b data.Bounds) (x, y
 }
 
 func ProjectionFromXY(x, y float64, c Position, d Dimension, b data.Bounds) (lon, lat float64) {
-	lon = b.MinLong + ((b.MaxLong - b.MinLong) / d.Width * (x - c.X))
-	lat = b.MinLat + ((b.MaxLat - b.MinLat) / d.Height * (d.Height - (y + c.Y)))
+	lon = b.MinLong + ((b.MaxLong - b.MinLong) / d.Width * (x + c.X))
+	lat = b.MinLat + ((b.MaxLat - b.MinLat) / d.Height * (d.Height - (y - c.Y)))
 	return lon, lat
 }

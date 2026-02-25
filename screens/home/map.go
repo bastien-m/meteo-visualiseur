@@ -24,16 +24,18 @@ import (
 )
 
 type HomeMap struct {
-	w            fyne.Window
-	logger       *slog.Logger
-	dimension    common.Dimension
-	geoData      *data.GeoData
-	iMap         *ui.InteractiveMap
-	stationLayer *canvas.Image
-	mw           *container.MultipleWindows
-	db           *sql.DB
-	camera       common.Position
-	mapMode      binding.Int
+	w              fyne.Window
+	logger         *slog.Logger
+	dimension      common.Dimension
+	geoData        *data.GeoData
+	iMap           *ui.InteractiveMap
+	stations       []data.StationInfo
+	stationLayer   *canvas.Image
+	mw             *container.MultipleWindows
+	db             *sql.DB
+	camera         common.Position
+	needMapRefresh binding.Bool
+	mapMode        binding.Int
 }
 
 func InitHomeMap(dimension common.Dimension) *HomeMap {
@@ -51,7 +53,8 @@ func InitHomeMap(dimension common.Dimension) *HomeMap {
 			Y: 0,
 			Z: 1,
 		},
-		mapMode: mapModeBinding,
+		mapMode:        mapModeBinding,
+		needMapRefresh: binding.NewBool(),
 	}
 }
 
@@ -60,7 +63,7 @@ func (h *HomeMap) Render() *fyne.Container {
 	geoData := &data.GeoData{
 		FranceGeoJSON: geojson,
 	}
-	geoData.SetBounds()
+	geoData.Bounds = geoData.ComputeBounds()
 	h.geoData = geoData
 
 	mapImg := h.renderMap(geoData)
@@ -69,9 +72,34 @@ func (h *HomeMap) Render() *fyne.Container {
 	h.iMap.OnHover = h.handleMapHovered
 	h.iMap.OnTap = h.handleMapTapped
 
+	h.iMap.OnDrag = h.handleOnDrag()
+
 	actions := h.createMapActions()
 
+	h.needMapRefresh.AddListener(binding.NewDataListener(func() {
+		needRefresh, err := h.needMapRefresh.Get()
+		if err == nil {
+			if needRefresh {
+				h.iMap.Image = h.renderMap(geoData)
+				h.AddStationsLayer(h.stations)
+				h.iMap.Refresh()
+				h.stationLayer.Refresh()
+				h.needMapRefresh.Set(false)
+			}
+		}
+
+	}))
+
 	return container.NewStack(h.iMap, actions, h.mw)
+}
+
+func (h *HomeMap) handleOnDrag() func(dx, dy float64) {
+	return func(dx, dy float64) {
+		h.needMapRefresh.Set(true)
+		h.camera.X -= dx
+		h.camera.Y += dy
+	}
+
 }
 
 func (h *HomeMap) createMapActions() *fyne.Container {
@@ -101,7 +129,8 @@ func (h *HomeMap) createMapActions() *fyne.Container {
 }
 
 func (h *HomeMap) AddStationsLayer(stations []data.StationInfo) {
-	stationsImg := renderStations(stations, h.camera, h.dimension, *h.geoData.Bounds)
+	h.stations = stations
+	stationsImg := h.renderStations(stations)
 	h.iMap.RemoveLayer(h.stationLayer)
 	h.iMap.AddLayer(stationsImg)
 	h.stationLayer = stationsImg
@@ -151,13 +180,13 @@ func (h *HomeMap) renderMap(g *data.GeoData) *canvas.Image {
 	return img
 }
 
-func renderStations(stations []data.StationInfo, c common.Position, d common.Dimension, b data.Bounds) *canvas.Image {
-	dc := gg.NewContext(int(d.Width), int(d.Height))
+func (h *HomeMap) renderStations(stations []data.StationInfo) *canvas.Image {
+	dc := gg.NewContext(int(h.dimension.Width), int(h.dimension.Height))
 	dc.SetColor(color.White)
 	dc.SetLineWidth(2)
 
 	for _, station := range stations {
-		x, y := common.Projection(station.Lon, station.Lat, c, d, b)
+		x, y := common.Projection(station.Lon, station.Lat, h.camera, h.dimension, *h.geoData.Bounds)
 		dc.DrawCircle(float64(x), float64(y), 0.5)
 		dc.Fill()
 	}

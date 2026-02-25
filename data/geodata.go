@@ -21,7 +21,7 @@ type Bounds struct {
 	MinLong, MaxLong, MinLat, MaxLat float64
 }
 
-func (g *GeoData) SetBounds() {
+func (g *GeoData) ComputeBounds() *Bounds {
 	bounds := &Bounds{
 		MinLong: math.MaxFloat64,
 		MaxLong: -math.MaxFloat64,
@@ -52,5 +52,5 @@ func (g *GeoData) SetBounds() {
 		}
 	}
 
-	g.Bounds = bounds
+	return bounds
 }

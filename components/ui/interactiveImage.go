@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image/color"
+	"meteo/common"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -20,17 +21,20 @@ const (
 
 type InteractiveMap struct {
 	widget.BaseWidget
-	image      *canvas.Image
-	size       fyne.Size
-	layers     []*canvas.Image
-	tooltip    *canvas.Text
-	hoverTimer *time.Timer
-	OnTap      func(pos fyne.Position)
-	OnHover    func(pos fyne.Position) string
-	dragCursor *canvas.Image
-	panCursor  *canvas.Image
-	mapMode    binding.Int
-	isDragging bool
+	Image                *canvas.Image
+	size                 fyne.Size
+	layers               []*canvas.Image
+	tooltip              *canvas.Text
+	hoverTimer           *time.Timer
+	OnTap                func(pos fyne.Position)
+	OnHover              func(pos fyne.Position) string
+	dragCursor           *canvas.Image
+	panCursor            *canvas.Image
+	mapMode              binding.Int
+	isDragging           bool
+	OnDrag               func(dx, dy float64)
+	previousDragPosition common.Position
+	isFirstDrag          bool
 }
 
 var _ desktop.Hoverable = (*InteractiveMap)(nil)
@@ -45,7 +49,7 @@ func NewInteractiveMap(
 	tooltip.TextSize = 12
 	tooltip.Hidden = true
 
-	cursorSize := fyne.NewSize(32, 32)
+	cursorSize := fyne.NewSize(16, 16)
 	dragCursor := canvas.NewImageFromResource(ResourceDragPng)
 	dragCursor.Resize(cursorSize)
 	dragCursor.Hidden = true
@@ -55,18 +59,21 @@ func NewInteractiveMap(
 	panCursor.Hidden = true
 
 	m := &InteractiveMap{
-		image:      img,
-		size:       fyne.NewSize(float32(width), float32(height)),
-		tooltip:    tooltip,
-		isDragging: false,
-		dragCursor: dragCursor,
-		panCursor:  panCursor,
-		mapMode:    mapMode,
+		Image:                img,
+		size:                 fyne.NewSize(float32(width), float32(height)),
+		tooltip:              tooltip,
+		isDragging:           false,
+		dragCursor:           dragCursor,
+		panCursor:            panCursor,
+		mapMode:              mapMode,
+		previousDragPosition: common.Position{X: 0, Y: 0, Z: 1},
+		isFirstDrag:          true,
 	}
 	m.ExtendBaseWidget(m)
 
 	return m
 }
+
 func (m *InteractiveMap) Dragged(e *fyne.DragEvent) {
 	mode, _ := m.mapMode.Get()
 	switch MapMode(mode) {
@@ -85,12 +92,27 @@ func (m *InteractiveMap) Dragged(e *fyne.DragEvent) {
 		m.dragCursor.Refresh()
 		m.panCursor.Hidden = true
 		m.panCursor.Refresh()
+
+		if m.OnDrag != nil {
+			if !m.isFirstDrag {
+				dx := float64(e.Position.X) - m.previousDragPosition.X
+				dy := float64(e.Position.Y) - m.previousDragPosition.Y
+				m.OnDrag(dx, dy)
+			}
+
+			m.isFirstDrag = false
+
+			m.previousDragPosition.X = float64(e.Position.X)
+			m.previousDragPosition.Y = float64(e.Position.Y)
+		}
+
 	}
 
 	// TODO: move camera here
 }
 
 func (m *InteractiveMap) DragEnd() {
+	m.isFirstDrag = true
 	m.isDragging = false
 	m.Refresh()
 }
@@ -205,8 +227,8 @@ func (m *InteractiveMap) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (r *mapRenderer) Layout(size fyne.Size) {
-	r.m.image.Resize(size)
-	r.m.image.Move(fyne.NewPos(0, 0))
+	r.m.Image.Resize(size)
+	r.m.Image.Move(fyne.NewPos(0, 0))
 	for _, l := range r.m.layers {
 		l.Resize(size)
 		l.Move(fyne.NewPos(0, 0))
@@ -218,7 +240,7 @@ func (r *mapRenderer) MinSize() fyne.Size {
 }
 
 func (r *mapRenderer) Refresh() {
-	r.m.image.Refresh()
+	r.m.Image.Refresh()
 	for _, l := range r.m.layers {
 		l.Refresh()
 	}
@@ -228,7 +250,7 @@ func (r *mapRenderer) Refresh() {
 }
 
 func (r *mapRenderer) Objects() []fyne.CanvasObject {
-	objs := []fyne.CanvasObject{r.m.image}
+	objs := []fyne.CanvasObject{r.m.Image}
 	for _, l := range r.m.layers {
 		objs = append(objs, l)
 	}
