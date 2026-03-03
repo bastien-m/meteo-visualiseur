@@ -73,17 +73,20 @@ func GetRainByStation(db *sql.DB, numPost string) ([]RainByStation, error) {
 		WHERE CAST(NUM_POSTE AS VARCHAR) = ?
 		GROUP BY NUM_POSTE, YEAR
 		HAVING count(1) > 365 * 0.95
+		ORDER BY YEAR ASC
 	`)
 
 	if err != nil {
 		return nil, err
 	}
+	defer stmt.Close()
 
 	rows, err := stmt.Query(numPost)
 
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	response := make([]RainByStation, 0, 1000)
 
@@ -94,7 +97,7 @@ func GetRainByStation(db *sql.DB, numPost string) ([]RainByStation, error) {
 
 	for {
 		if rows.Next() {
-			rows.Scan(&numPost, &year, &rain)
+			rows.Scan(&numPoste, &year, &rain)
 			response = append(response, RainByStation{
 				NumPost: numPoste,
 				Year:    year,
@@ -112,11 +115,14 @@ func GetStationRain(db *sql.DB, station string) []StationRain {
 	if err != nil {
 		return nil
 	}
+	defer stmt.Close()
 	rows, err := stmt.Query(station + "%")
 
 	if err != nil {
 		return nil
 	}
+
+	defer rows.Close()
 
 	response := make([]StationRain, 0, 1000)
 
@@ -146,12 +152,15 @@ func GetStations(db *sql.DB) ([]StationInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer stmt.Close()
 
 	rows, err := stmt.Query()
 
 	if err != nil {
 		return nil, err
 	}
+
+	defer rows.Close()
 
 	var numPoste, nomUsuel string
 	var lat, long, alti float64
@@ -187,6 +196,8 @@ func GetClosestStation(db *sql.DB, lat, long float64) (*StationInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	defer stmt.Close()
 
 	var numPoste, nomUsuel string
 	var latPoste, longPoste, alti, d float64

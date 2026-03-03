@@ -37,6 +37,7 @@ type HomeMap struct {
 	camera         common.Position
 	needMapRefresh binding.Bool
 	mapMode        binding.Int
+	ShowDetailView func(station *data.StationInfo)
 }
 
 func InitHomeMap(dimension common.Dimension) *HomeMap {
@@ -233,17 +234,28 @@ func (h *HomeMap) handleMapTapped(pos fyne.Position) {
 			dialog.NewError(err, h.w)
 			return
 		}
-		h.HandleStationWindow(station)
+		h.HandleStationWindow(station, h.ShowDetailView)
 	case ui.MOVE:
 
 	}
 }
 
-func (h *HomeMap) HandleStationWindow(station *data.StationInfo) {
+func (h *HomeMap) HandleStationWindow(station *data.StationInfo, showDetailsHandler func(station *data.StationInfo)) {
 	content := buildStationMetadataDisplay(h.db, h.w, station)
 	if content != nil {
-		wrapped := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
-		iw := container.NewInnerWindow(station.CommonName, wrapped)
+		wrapped := container.New(
+			layout.NewGridWrapLayout(fyne.NewSize(250, 150)), content)
+		vbox := container.NewVBox(
+			wrapped,
+		)
+		if showDetailsHandler != nil {
+			vbox.Add(
+				widget.NewButtonWithIcon("Données de la station", theme.SearchIcon(), func() {
+					showDetailsHandler(station)
+				}),
+			)
+		}
+		iw := container.NewInnerWindow(station.CommonName, vbox)
 		iw.CloseIntercept = func() {
 			for i, win := range h.mw.Windows {
 				if win == iw {

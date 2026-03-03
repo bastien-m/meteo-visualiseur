@@ -19,14 +19,15 @@ import (
 )
 
 type HomeScreen struct {
-	logger       *slog.Logger
-	db           *sql.DB
-	window       fyne.Window
-	sidebar      *home.HomeSidebar
-	homeMap      *home.HomeMap
-	stations     []data.StationInfo
-	stationList  binding.List[string]
-	mapDimension common.Dimension
+	logger        *slog.Logger
+	db            *sql.DB
+	window        fyne.Window
+	sidebar       *home.HomeSidebar
+	homeMap       *home.HomeMap
+	stations      []data.StationInfo
+	stationList   binding.List[string]
+	mapDimension  common.Dimension
+	tabsContainer *container.DocTabs
 }
 
 func InitHomeScreen() *HomeScreen {
@@ -58,13 +59,26 @@ func InitHomeScreen() *HomeScreen {
 }
 
 func (h *HomeScreen) Render() fyne.CanvasObject {
+	h.homeMap.ShowDetailView = h.handleShowDetailsView
 	iMap := h.homeMap.Render()
 
 	h.sidebar.HandleSelectStation = h.handleSelectStation
 
+	mapTab := container.NewTabItem("Cartes", iMap)
+
+	h.tabsContainer = container.NewDocTabs(
+		mapTab,
+	)
+
+	h.tabsContainer.CloseIntercept = func(ti *container.TabItem) {
+		if ti == mapTab {
+			return
+		}
+	}
+
 	split := container.NewHSplit(
 		h.sidebar.Render(),
-		iMap,
+		h.tabsContainer,
 	)
 	split.Offset = 0.33
 
@@ -77,7 +91,19 @@ func (h *HomeScreen) handleSelectStation(name string) {
 		dialog.NewError(err, h.window)
 		return
 	}
-	h.homeMap.HandleStationWindow(station)
+	h.homeMap.HandleStationWindow(station, h.handleShowDetailsView)
+}
+
+func (h *HomeScreen) handleShowDetailsView(station *data.StationInfo) {
+	view := home.InitStationDetailsComponent(common.Dimension{Width: 600, Height: 600})
+	c := view.Render(station)
+
+	if c != nil {
+		viewTab := container.NewTabItem(station.CommonName, c)
+		h.tabsContainer.Append(viewTab)
+	} else {
+		dialog.ShowError(fmt.Errorf("impossible de charger les données de la station %s", station.CommonName), h.window)
+	}
 }
 
 func (h *HomeScreen) LoadExistingData() {
